@@ -1,0 +1,8 @@
+.vs/
+bin/
+obj/
+work_folder/bin/
+work_folder/obj/
+*.user
+*.suo
+TestResults/
