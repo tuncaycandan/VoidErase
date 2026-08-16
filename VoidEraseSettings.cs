@@ -30,7 +30,7 @@ internal static class VoidEraseSettings
 
     public static bool SkipReparsePoints
     {
-        get => GetBool(nameof(SkipReparsePoints), false);
+        get => GetBool(nameof(SkipReparsePoints), true);
         set => SetBool(nameof(SkipReparsePoints), value);
     }
 
