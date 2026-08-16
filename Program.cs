@@ -873,57 +873,79 @@ internal sealed class ShellDestroyForm : Form, IProgressReporter
         Activate();
         BringToFront();
 
-        cts = new CancellationTokenSource();
-        cancel.Enabled = true;
-        status.Text = L.T("Hazırlanıyor...", "Preparing...");
-        detail.Text = Path.GetFileName(file);
+      cts = new CancellationTokenSource();
+cancel.Enabled = true;
+status.Text = L.T("Hazırlanıyor...", "Preparing...");
+detail.Text = Path.GetFileName(file);
 
-        try
+int totalFiles = 0;
+long totalBytes = 0;
+
+try
+{
+    if (isDirectory)
+    {
+        string[] files = Directory
+            .EnumerateFiles(file, "*", SearchOption.AllDirectories)
+            .ToArray();
+
+        totalFiles = files.Length;
+
+        foreach (string item in files)
         {
-            await Task.Run(() => Program.DestroyPath(file, this), cts.Token);
-
-            if (!cts.IsCancellationRequested)
+            try
             {
-                progress.Value = 100;
-                status.Text = L.T("Tamamlandı.", "Completed.");
-                detail.Text = L.T(isDirectory ? "Klasör ve içeriği başarıyla kalıcı olarak silindi." : "Dosya başarıyla kalıcı olarak silindi.", isDirectory ? "Folder and its contents were permanently deleted successfully." : "File was permanently deleted successfully.");
-                cancel.Enabled = false;
-
-                using (Form result = new Form())
-                {
-                    result.ShowInTaskbar = false;
-                    result.StartPosition = FormStartPosition.Manual;
-                    result.Location = new Point(-32000, -32000);
-                    result.Size = new Size(1, 1);
-                    result.Opacity = 0;
-                    result.TopMost = true;
-
-                    result.Shown += (_, _) =>
-                    {
-                        result.Activate();
-                        result.BringToFront();
-                    };
-
-                    result.Show(this);
-                    result.Hide();
-
-                    MessageBox.Show(
-                        result,
-                        L.T(isDirectory ? "Klasör ve içeriği başarıyla kalıcı olarak silindi." : "Dosya başarıyla kalıcı olarak silindi.", isDirectory ? "Folder and its contents were permanently deleted successfully." : "File was permanently deleted successfully."),
-                        L.T("Kalıcı Olarak Yok Et", "Permanent Delete"),
-                        MessageBoxButtons.OK,
-                        MessageBoxIcon.Information);
-
-                    // Tamam'a basıldıktan sonra sağ tık işlem host'u da kapanır.
-                    result.Close();
-                }
-
-                Close();
+                totalBytes += new FileInfo(item).Length;
+            }
+            catch
+            {
             }
         }
-        catch (OperationCanceledException)
+    }
+    else
+    {
+        totalFiles = 1;
+        totalBytes = new FileInfo(file).Length;
+    }
+
+    await Task.Run(() => Program.DestroyPath(file, this), cts.Token);
+
+    if (!cts.IsCancellationRequested)
+    {
+        progress.Value = 100;
+        status.Text = L.T("Tamamlandı.", "Completed.");
+        detail.Text = L.T(
+            isDirectory
+                ? "Klasör ve içeriği başarıyla kalıcı olarak silindi."
+                : "Dosya başarıyla kalıcı olarak silindi.",
+            isDirectory
+                ? "Folder and its contents were permanently deleted successfully."
+                : "File was permanently deleted successfully.");
+
+        cancel.Enabled = false;
+
+        OperationResult operationResult = new OperationResult
         {
-            status.Text = L.T("İptal edildi.", "Cancelled.");
+            TotalFiles = totalFiles,
+            TotalBytes = totalBytes,
+            Successful = totalFiles,
+            Failed = 0,
+            Verified = totalFiles,
+            Cancelled = false
+        };
+
+        using (OperationSummaryForm summary =
+            new OperationSummaryForm(operationResult, L.English))
+        {
+            summary.ShowDialog(this);
+        }
+
+        Close();
+    }
+}
+catch (OperationCanceledException)
+{
+	status.Text = L.T("İptal edildi.", "Cancelled.");
             detail.Text = L.T("Orijinal dosya korunmuştur.", "The original file was preserved.");
         }
         catch (Exception ex)
@@ -1443,6 +1465,9 @@ internal sealed class MainForm : Form, IProgressReporter
         SetControlsRunning(true);
         DateTime startedAt = DateTime.Now;
         int success = 0;
+		long totalBytes = 0;
+int verified = 0;
+
 
         try
         {
@@ -1457,7 +1482,9 @@ internal sealed class MainForm : Form, IProgressReporter
                 detailLabel.ForeColor = TextSecondary;
                 SetProgress(0);
                 await Task.Run(() => Program.DestroyFile(file, this), cts.Token);
-                success++;
+               success++;
+verified++;
+totalBytes += fileSize;
                 HistoryStore.Append(file, fileSize, "SUCCESS");
             }
 
@@ -1473,7 +1500,17 @@ internal sealed class MainForm : Form, IProgressReporter
             detailLabel.ForeColor = Color.FromArgb(30, 145, 88);
             selectedItems.Clear();
 
-            MessageBox.Show(this, detailLabel.Text, L.T("Kalıcı Olarak Yok Et", "Permanent Delete"), MessageBoxButtons.OK, MessageBoxIcon.Information);
+            OperationResult result = new OperationResult
+{
+    TotalFiles = files.Count,
+    TotalBytes = totalBytes,
+    Successful = success,
+    Failed = files.Count - success,
+    Verified = verified,
+    Cancelled = false
+};
+
+ShowOperationSummary(result);
         }
         catch (OperationCanceledException)
         {
