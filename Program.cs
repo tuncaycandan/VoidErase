@@ -48,7 +48,7 @@ internal static class L
 
 
 
-    
+
     public static void Load()
     {
         try
@@ -443,9 +443,98 @@ internal static class Program
         CryptoCompat.ZeroMemory(tag);
     }
 
+private static void EnsurePathAllowed(string path)
+{
+    string fullPath;
+
+    try
+    {
+        fullPath = Path.GetFullPath(path).TrimEnd(
+            Path.DirectorySeparatorChar,
+            Path.AltDirectorySeparatorChar);
+    }
+    catch
+    {
+        throw new InvalidOperationException(
+            L.T(
+                "Hedef yol geçerli değil.",
+                "The target path is invalid."));
+    }
+
+    // Kullanıcının açıkça korumaya aldığı yollar.
+    if (VoidEraseSettings.IsProtectedPath(fullPath))
+    {
+        throw new InvalidOperationException(
+            L.T(
+                "Bu yol kullanıcı tarafından korumalı olarak işaretlenmiş:\n\n" + fullPath,
+                "This path is protected by the user:\n\n" + fullPath));
+    }
+
+    // C:\, D:\ vb. sürücü köklerini koru.
+    if (VoidEraseSettings.ProtectSystemDrive &&
+        Path.GetPathRoot(fullPath) != null &&
+        string.Equals(
+            fullPath.TrimEnd('\\'),
+            Path.GetPathRoot(fullPath)!.TrimEnd('\\'),
+            StringComparison.OrdinalIgnoreCase))
+    {
+        throw new InvalidOperationException(
+            L.T(
+                "Sürücü kökü güvenlik nedeniyle korunuyor:\n\n" + fullPath,
+                "Drive roots are protected for safety:\n\n" + fullPath));
+    }
+
+    if (!VoidEraseSettings.ProtectSystemPaths)
+        return;
+
+    string windows = Environment.GetFolderPath(
+        Environment.SpecialFolder.Windows);
+
+    string programFiles = Environment.GetFolderPath(
+        Environment.SpecialFolder.ProgramFiles);
+
+    string programFilesX86 = Environment.GetFolderPath(
+        Environment.SpecialFolder.ProgramFilesX86);
+
+    string programData = Environment.GetFolderPath(
+        Environment.SpecialFolder.CommonApplicationData);
+
+    string[] protectedSystemPaths =
+    {
+        windows,
+        programFiles,
+        programFilesX86,
+        programData
+    };
+
+    foreach (string protectedPath in protectedSystemPaths)
+    {
+        if (string.IsNullOrWhiteSpace(protectedPath))
+            continue;
+
+        string normalized = Path.GetFullPath(protectedPath)
+            .TrimEnd('\\');
+
+        if (fullPath.Equals(
+                normalized,
+                StringComparison.OrdinalIgnoreCase) ||
+            fullPath.StartsWith(
+                normalized + "\\",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            throw new InvalidOperationException(
+                L.T(
+                    "Windows sistem yolu güvenlik nedeniyle korunuyor:\n\n" + fullPath,
+                    "This Windows system path is protected for safety:\n\n" + fullPath));
+        }
+    }
+}
+
 internal static void DestroyPath(string path, IProgressReporter form)
 {
     form.ThrowIfCancellationRequested();
+
+    EnsurePathAllowed(path);
 
     if (File.Exists(path))
     {
@@ -564,12 +653,17 @@ private static void DestroyDirectory(
             // Junction, symbolic link veya başka bir reparse point:
             // içine kesinlikle girmiyoruz.
             if ((attributes & FileAttributes.ReparsePoint) != 0)
-            {
-                throw new InvalidOperationException(
-                    L.T(
-                        "Sembolik bağlantı veya junction içeren klasörler güvenlik nedeniyle işlenmiyor:\n" + entry,
-                        "Directories containing symbolic links or junctions are not processed for safety:\n" + entry));
-            }
+{
+    if (VoidEraseSettings.SkipReparsePoints)
+    {
+        continue;
+    }
+
+    throw new InvalidOperationException(
+        L.T(
+            "Sembolik bağlantı veya reparse point olan öğeler üzerinde işlem yapılmıyor:\n" + entry,
+            "Symbolic links and reparse-point items are not processed:\n" + entry));
+}
 
             if ((attributes & FileAttributes.Directory) != 0)
             {
@@ -594,20 +688,28 @@ private static void DestroyDirectory(
             FileInfo info = new FileInfo(file);
 
             if ((info.Attributes & FileAttributes.System) != 0)
-            {
-                throw new InvalidOperationException(
-                    L.T(
-                        "Sistem dosyaları üzerinde işlem yapılmıyor:\n" + file,
-                        "System files are not processed:\n" + file));
-            }
+{
+    throw new InvalidOperationException(
+        L.T(
+            "Sistem dosyaları güvenlik nedeniyle işlenmiyor:\n" + file,
+            "System files are skipped for safety:\n" + file));
+}
 
-            if ((info.Attributes & FileAttributes.ReparsePoint) != 0)
-            {
-                throw new InvalidOperationException(
-                    L.T(
-                        "Sembolik bağlantı veya reparse point olan dosya işlenmiyor:\n" + file,
-                        "Symbolic-link or reparse-point files are not processed:\n" + file));
-            }
+if ((info.Attributes & FileAttributes.Hidden) != 0)
+{
+    throw new InvalidOperationException(
+        L.T(
+            "Gizli dosyalar güvenlik nedeniyle işlenmiyor:\n" + file,
+            "Hidden files are skipped for safety:\n" + file));
+}
+
+if ((info.Attributes & FileAttributes.ReparsePoint) != 0)
+{
+    throw new InvalidOperationException(
+        L.T(
+            "Sembolik bağlantı veya reparse point olan dosya işlenmiyor:\n" + file,
+            "Symbolic-link or reparse-point files are not processed:\n" + file));
+}
 
             totalBytes += info.Length;
         }
@@ -1117,39 +1219,106 @@ detail.Text = Path.GetFileName(file);
 
     int totalFiles = 0;
     long totalBytes = 0;
+	var operationFiles = new List<string>();
 
     try
     {
         if (isDirectory)
+{
+    List<string> files = new();
+
+    Stack<string> pending = new();
+    pending.Push(file);
+
+    while (pending.Count > 0)
+    {
+        cts.Token.ThrowIfCancellationRequested();
+
+        string current = pending.Pop();
+        string[] entries;
+
+        try
         {
-            string[] files = Directory
-                .EnumerateFiles(
-                    file,
-                    "*",
-                    SearchOption.AllDirectories)
-                .ToArray();
+            entries = Directory.GetFileSystemEntries(current);
+        }
+        catch (Exception ex) when (
+            ex is IOException ||
+            ex is UnauthorizedAccessException)
+        {
+            throw new InvalidOperationException(
+                L.T(
+                    "Klasör okunamadı:\n" + current,
+                    "Directory could not be read:\n" + current),
+                ex);
+        }
 
-            totalFiles = files.Length;
+        foreach (string entry in entries)
+        {
+            cts.Token.ThrowIfCancellationRequested();
 
-            foreach (string item in files)
+            FileAttributes attributes;
+
+            try
             {
-                cts.Token.ThrowIfCancellationRequested();
-
-                try
-                {
-                    totalBytes += new FileInfo(item).Length;
-                }
-                catch
-                {
-                    // Dosya işlem başlamadan önce erişilemez hale geldiyse
-                    // ana işlem sırasında ayrıca hata değerlendirilecektir.
-                }
+                attributes = File.GetAttributes(entry);
             }
+            catch (Exception ex) when (
+                ex is IOException ||
+                ex is UnauthorizedAccessException)
+            {
+                throw new InvalidOperationException(
+                    L.T(
+                        "Dosya veya klasör özellikleri okunamadı:\n" + entry,
+                        "File or directory attributes could not be read:\n" + entry),
+                    ex);
+            }
+
+            if ((attributes & FileAttributes.ReparsePoint) != 0)
+            {
+                if (VoidEraseSettings.SkipReparsePoints)
+                    continue;
+
+                throw new InvalidOperationException(
+                    L.T(
+                        "Sembolik bağlantı veya reparse point içeren öğe bulundu:\n" + entry,
+                        "A symbolic link or reparse-point item was found:\n" + entry));
+            }
+
+            if ((attributes & FileAttributes.Directory) != 0)
+            {
+                pending.Push(entry);
+            }
+            else
+            {
+                files.Add(entry);
+            }
+        }
+    }
+
+    totalFiles = files.Count;
+    operationFiles.AddRange(files);
+
+    foreach (string item in files)
+    {
+        cts.Token.ThrowIfCancellationRequested();
+
+        try
+        {
+            totalBytes += new FileInfo(item).Length;
+        }
+        catch
+        {
+            // Dosya işlem başlamadan önce erişilemez hale geldiyse
+            // ana işlem sırasında ayrıca hata değerlendirilecektir.
+        }
+    }
+
         }
         else
         {
             totalFiles = 1;
             totalBytes = new FileInfo(file).Length;
+			operationFiles.Add(file);
         }
 
         await Task.Run(
@@ -1174,7 +1343,7 @@ detail.Text = Path.GetFileName(file);
 
         cancel.Enabled = false;
 
-     OperationResult operationResult = new OperationResult
+OperationResult operationResult = new OperationResult
 {
     TargetPath = file,
     StartedAt = operationStartedAt,
@@ -1184,9 +1353,12 @@ detail.Text = Path.GetFileName(file);
     TotalBytes = totalBytes,
     Successful = totalFiles,
     Failed = 0,
+    Skipped = 0,
     Verified = totalFiles,
     Cancelled = false
 };
+
+operationResult.SuccessfulFiles.AddRange(operationFiles);
 
         using (OperationSummaryForm summary =
             new OperationSummaryForm(
@@ -1653,10 +1825,25 @@ updateButton.Click += async (_, _) => await CheckForUpdatesAsync(true);
             if (File.Exists(item)) { total += new FileInfo(item).Length; count++; }
             else if (Directory.Exists(item))
             {
-                foreach (string file in Directory.EnumerateFiles(item, "*", SearchOption.AllDirectories))
-                {
-                    try { total += new FileInfo(file).Length; count++; } catch { }
-                }
+                try
+{
+    foreach (string file in ExpandFilesForSummary(item))
+    {
+        try
+        {
+            total += new FileInfo(file).Length;
+            count++;
+        }
+        catch
+        {
+        }
+    }
+}
+catch
+{
+    // Özet ekranında erişilemeyen/reparse öğeler nedeniyle
+    // seçim tamamen başarısız sayılmaz.
+}
             }
         }
 
@@ -1694,115 +1881,449 @@ updateButton.Click += async (_, _) => await CheckForUpdatesAsync(true);
         if (dlg.ShowDialog(this) == DialogResult.OK) SetFolderSelection(dlg.SelectedPath);
     }
 
-    private List<string> ExpandSelectedFiles()
+private IEnumerable<string> ExpandFilesForSummary(string directory)
+{
+    Stack<string> pending = new Stack<string>();
+    pending.Push(directory);
+
+    while (pending.Count > 0)
     {
-        var files = new List<string>();
-        foreach (string item in selectedItems)
-        {
-            if (File.Exists(item)) files.Add(item);
-            else if (Directory.Exists(item))
-                files.AddRange(Directory.EnumerateFiles(item, "*", SearchOption.AllDirectories));
-        }
-        return files.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-    }
+        string current = pending.Pop();
 
-    private async Task StartDestroyAsync()
-    {
-        if (running || selectedItems.Count == 0) return;
-
-        if (L.ConfirmBeforeErase)
-        {
-            DialogResult answer = MessageBox.Show(
-                this,
-                L.T("Bu işlem geri alınamaz.\n\nSeçilen dosyalar AES-256-GCM ile işlenecek ve doğrulama tamamlandıktan sonra orijinalleri silinecektir.\n\nDevam etmek istiyor musunuz?",
-                    "This operation cannot be undone.\n\nSelected files will be processed with AES-256-GCM and originals will be deleted only after verification.\n\nContinue?"),
-                L.T("Kalıcı Olarak Yok Et", "Permanent Delete"), MessageBoxButtons.YesNo, MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2);
-            if (answer != DialogResult.Yes) return;
-        }
-
-        List<string> files;
-        try { files = ExpandSelectedFiles(); }
-        catch (Exception ex)
-        {
-            MessageBox.Show(this, ex.Message, "VoidErase", MessageBoxButtons.OK, MessageBoxIcon.Error);
-            return;
-        }
-        if (files.Count == 0) { SetIdle(); return; }
-
-        running = true;
-        cts = new CancellationTokenSource();
-        SetControlsRunning(true);
-        DateTime startedAt = DateTime.Now;
-        int success = 0;
-		long totalBytes = 0;
-int verified = 0;
-
+        string[] entries;
 
         try
         {
-            for (int i = 0; i < files.Count; i++)
+            entries = Directory.GetFileSystemEntries(current);
+        }
+        catch
+        {
+            continue;
+        }
+
+        foreach (string entry in entries)
+        {
+            FileAttributes attributes;
+
+            try
             {
-                cts.Token.ThrowIfCancellationRequested();
-                string file = files[i];
-                if (!File.Exists(file)) continue;
-                long fileSize = new FileInfo(file).Length;
-                statusLabel.Text = L.T($"İşleniyor... {i + 1}/{files.Count}", $"Processing... {i + 1}/{files.Count}");
-                detailLabel.Text = Path.GetFileName(file);
-                detailLabel.ForeColor = TextSecondary;
-                SetProgress(0);
-                await Task.Run(() => Program.DestroyFile(file, this), cts.Token);
-               success++;
-verified++;
-totalBytes += fileSize;
-                HistoryStore.Append(file, fileSize, "SUCCESS");
+                attributes = File.GetAttributes(entry);
+            }
+            catch
+            {
+                continue;
             }
 
-            foreach (string folder in selectedItems.Where(Directory.Exists))
-            {
-                if (Directory.Exists(folder) && !Directory.EnumerateFileSystemEntries(folder).Any())
-                    Directory.Delete(folder, false);
-            }
+            if ((attributes & FileAttributes.ReparsePoint) != 0)
+                continue;
 
-            SetProgress(100);
-            statusLabel.Text = L.T("Tamamlandı.", "Completed.");
-            detailLabel.Text = L.T($"{success:N0} dosya başarıyla yok edildi.", $"{success:N0} files were successfully erased.");
-            detailLabel.ForeColor = Color.FromArgb(30, 145, 88);
-            selectedItems.Clear();
-
-            OperationResult result = new OperationResult
-{
-    TotalFiles = files.Count,
-    TotalBytes = totalBytes,
-    Successful = success,
-    Failed = files.Count - success,
-    Verified = verified,
-    Cancelled = false
-};
-
-ShowOperationSummary(result);
-        }
-        catch (OperationCanceledException)
-        {
-            statusLabel.Text = L.T("İptal edildi.", "Cancelled.");
-            detailLabel.Text = L.T("Tamamlanan dosyalar işlendi; kalan dosyalar korunmuştur.", "Completed files were processed; remaining files were preserved.");
-            detailLabel.ForeColor = Color.FromArgb(176, 125, 20);
-            HistoryStore.AppendBatch("CANCELLED", success);
-        }
-        catch (Exception ex)
-        {
-            statusLabel.Text = L.T("Hata.", "Error.");
-            detailLabel.Text = L.T("İşlem durduruldu; kalan dosyalar korunmuştur.", "Operation stopped; remaining files were preserved.");
-            detailLabel.ForeColor = Color.FromArgb(190, 55, 55);
-            MessageBox.Show(this, L.T("İşlem başarısız oldu.\n\n" + ex.Message, "Operation failed.\n\n" + ex.Message), "VoidErase", MessageBoxButtons.OK, MessageBoxIcon.Error);
-            HistoryStore.AppendBatch("FAILED", success);
-        }
-        finally
-        {
-            cts?.Dispose(); cts = null; running = false; SetControlsRunning(false);
-            if (selectedItems.Count == 0) SetIdle(); else RefreshSelectionSummary();
-            UpdateRegistryStatus();
+            if ((attributes & FileAttributes.Directory) != 0)
+                pending.Push(entry);
+            else
+                yield return entry;
         }
     }
+}
+
+    private List<string> ExpandSelectedFiles()
+{
+    var files = new List<string>();
+
+    foreach (string item in selectedItems)
+    {
+        if (File.Exists(item))
+        {
+            files.Add(item);
+            continue;
+        }
+
+        if (!Directory.Exists(item))
+            continue;
+
+        Stack<string> pending = new Stack<string>();
+        pending.Push(item);
+
+        while (pending.Count > 0)
+        {
+            string current = pending.Pop();
+
+            string[] entries;
+
+            try
+            {
+                entries = Directory.GetFileSystemEntries(current);
+            }
+            catch
+            {
+                continue;
+            }
+
+            foreach (string entry in entries)
+            {
+                FileAttributes attributes;
+
+                try
+                {
+                    attributes = File.GetAttributes(entry);
+                }
+                catch
+                {
+                    continue;
+                }
+
+                if ((attributes & FileAttributes.ReparsePoint) != 0)
+                {
+                    if (VoidEraseSettings.SkipReparsePoints)
+                        continue;
+
+                    throw new InvalidOperationException(
+                        L.T(
+                            "Sembolik bağlantı veya reparse point içeren öğe seçilen klasörde bulundu:\n" + entry,
+                            "A symbolic link or reparse-point item was found in the selected folder:\n" + entry));
+                }
+
+                if ((attributes & FileAttributes.Directory) != 0)
+                {
+                    pending.Push(entry);
+                }
+                else
+                {
+                    files.Add(entry);
+                }
+            }
+        }
+    }
+
+    return files
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .ToList();
+}
+private void formSafeReportProgress(
+    long completedBytes,
+    long totalBytes,
+    TimeSpan elapsed)
+{
+    if (IsDisposed || Disposing)
+        return;
+
+    if (InvokeRequired)
+    {
+        BeginInvoke(new Action(() =>
+            formSafeReportProgress(
+                completedBytes,
+                totalBytes,
+                elapsed)));
+
+        return;
+    }
+
+    ReportProgress(
+        completedBytes,
+        Math.Max(totalBytes, 1),
+        elapsed);
+}
+
+    private async Task StartDestroyAsync()
+{
+    if (running || selectedItems.Count == 0)
+        return;
+
+    if (L.ConfirmBeforeErase)
+    {
+        DialogResult answer = MessageBox.Show(
+            this,
+            L.T(
+                "Bu işlem geri alınamaz.\n\n" +
+                "Seçilen dosyalar AES-256-GCM ile işlenecek ve " +
+                "doğrulama tamamlandıktan sonra orijinalleri silinecektir.\n\n" +
+                "Devam etmek istiyor musunuz?",
+                "This operation cannot be undone.\n\n" +
+                "Selected files will be processed with AES-256-GCM " +
+                "and originals will be deleted only after verification.\n\n" +
+                "Continue?"),
+            L.T("Kalıcı Olarak Yok Et", "Permanent Delete"),
+            MessageBoxButtons.YesNo,
+            MessageBoxIcon.Warning,
+            MessageBoxDefaultButton.Button2);
+
+        if (answer != DialogResult.Yes)
+            return;
+    }
+
+    running = true;
+    destroyButton.Enabled = false;
+
+    cts = new CancellationTokenSource();
+
+    DateTime operationStartedAt = DateTime.Now;
+    Stopwatch operationTimer = Stopwatch.StartNew();
+
+    List<string> files;
+
+    try
+    {
+        files = ExpandSelectedFiles()
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .ToList();
+    }
+    catch (Exception ex)
+    {
+        MessageBox.Show(
+            this,
+            L.T(
+                "Dosya listesi oluşturulamadı:\n\n" + ex.Message,
+                "The file list could not be created:\n\n" + ex.Message),
+            "VoidErase",
+            MessageBoxButtons.OK,
+            MessageBoxIcon.Error);
+
+        running = false;
+        destroyButton.Enabled = true;
+        return;
+    }
+
+    if (files.Count == 0)
+    {
+        MessageBox.Show(
+            this,
+            L.T(
+                "İşlenecek dosya bulunamadı.",
+                "No files were found to process."),
+            "VoidErase",
+            MessageBoxButtons.OK,
+            MessageBoxIcon.Information);
+
+        running = false;
+        destroyButton.Enabled = true;
+        return;
+    }
+
+    var result = new OperationResult
+    {
+        TargetPath = selectedItems.Count == 1
+            ? selectedItems[0]
+            : L.T("Birden fazla öğe", "Multiple items"),
+
+        StartedAt = operationStartedAt,
+        TotalFiles = files.Count
+    };
+
+    long totalBytes = 0;
+
+    foreach (string file in files)
+    {
+        try
+        {
+            totalBytes += new FileInfo(file).Length;
+        }
+        catch
+        {
+            // Boyut okunamazsa silme işlemini burada durdurmuyoruz.
+        }
+    }
+
+    result.TotalBytes = totalBytes;
+
+    long completedBytes = 0;
+
+    try
+    {
+        for (int i = 0; i < files.Count; i++)
+        {
+            cts.Token.ThrowIfCancellationRequested();
+
+            string file = files[i];
+
+            long fileSize = 0;
+
+            try
+            {
+                fileSize = new FileInfo(file).Length;
+            }
+            catch
+            {
+                fileSize = 0;
+            }
+
+            statusLabel.Text = L.T(
+                $"İşleniyor... {i + 1}/{files.Count}",
+                $"Processing... {i + 1}/{files.Count}");
+
+            detailLabel.Text = Path.GetFileName(file);
+            detailLabel.ForeColor = TextSecondary;
+
+            SetProgress(0);
+
+            try
+            {
+           await Task.Run(
+    () => Program.DestroyFile(file, this),
+    cts.Token);
+
+                result.Successful++;
+                result.Verified++;
+                result.SuccessfulFiles.Add(file);
+
+                HistoryStore.Append(
+                    file,
+                    fileSize,
+                    "SUCCESS");
+            }
+            catch (OperationCanceledException)
+            {
+                throw;
+            }
+            catch (UnauthorizedAccessException)
+            {
+                result.Skipped++;
+                result.SkippedFiles.Add(file);
+
+                HistoryStore.Append(
+                    file,
+                    fileSize,
+                    "SKIPPED");
+            }
+            catch (InvalidOperationException ex)
+            {
+                // Reparse point / sistem dosyası gibi güvenlik nedeniyle
+                // işlenmeyen öğeler "Skipped" olarak raporlanır.
+                result.Skipped++;
+                result.SkippedFiles.Add(
+                    file + " — " + ex.Message);
+
+                HistoryStore.Append(
+                    file,
+                    fileSize,
+                    "SKIPPED");
+            }
+            catch (IOException)
+            {
+                // Dosya okunamıyor, kilitli veya işlem sırasında erişilemiyor.
+                // Diğer dosyaların işlenmesine devam edilir.
+                result.Failed++;
+                result.FailedFiles.Add(file);
+
+                HistoryStore.Append(
+                    file,
+                    fileSize,
+                    "FAILED");
+            }
+            catch (Exception ex)
+            {
+                result.Failed++;
+                result.FailedFiles.Add(
+                    file + " — " + ex.Message);
+
+                HistoryStore.Append(
+                    file,
+                    fileSize,
+                    "FAILED");
+            }
+
+            completedBytes += fileSize;
+
+            formSafeReportProgress(
+                completedBytes,
+                Math.Max(totalBytes, 1),
+                operationTimer.Elapsed);
+        }
+
+        // Sadece tamamen boşalan seçili klasörleri kaldır.
+        foreach (string folder in selectedItems.Where(Directory.Exists))
+        {
+            cts.Token.ThrowIfCancellationRequested();
+
+            try
+            {
+                DirectoryInfo info = new DirectoryInfo(folder);
+
+                if ((info.Attributes & FileAttributes.ReparsePoint) != 0)
+                    continue;
+
+                if (!Directory.EnumerateFileSystemEntries(folder).Any())
+                    Directory.Delete(folder, false);
+            }
+            catch
+            {
+                // Klasör silinemiyorsa dosya sonuçlarını bozma.
+            }
+        }
+
+        operationTimer.Stop();
+
+        result.Elapsed = operationTimer.Elapsed;
+        result.Cancelled = false;
+
+        SetProgress(100);
+
+        if (result.Failed == 0 && result.Skipped == 0)
+        {
+            statusLabel.Text = L.T(
+                "Tamamlandı.",
+                "Completed.");
+
+            detailLabel.Text = L.T(
+                $"{result.Successful:N0} dosya başarıyla yok edildi.",
+                $"{result.Successful:N0} files were successfully erased.");
+
+            detailLabel.ForeColor = Color.FromArgb(30, 145, 88);
+        }
+        else
+        {
+            statusLabel.Text = L.T(
+                "İşlem tamamlandı.",
+                "Operation completed.");
+
+            detailLabel.Text = L.T(
+                $"{result.Successful:N0} başarılı • " +
+                $"{result.Failed:N0} başarısız • " +
+                $"{result.Skipped:N0} atlandı.",
+                $"{result.Successful:N0} successful • " +
+                $"{result.Failed:N0} failed • " +
+                $"{result.Skipped:N0} skipped.");
+
+            detailLabel.ForeColor = Color.FromArgb(190, 120, 30);
+        }
+
+        selectedItems.Clear();
+
+        ShowOperationSummary(result);
+    }
+    catch (OperationCanceledException)
+    {
+        operationTimer.Stop();
+
+        result.Elapsed = operationTimer.Elapsed;
+        result.Cancelled = true;
+
+        statusLabel.Text = L.T(
+            "İptal edildi.",
+            "Cancelled.");
+
+        detailLabel.Text = L.T(
+            "Tamamlanan dosyalar işlendi; kalan dosyalar korunmuştur.",
+            "Completed files were processed; remaining files were preserved.");
+
+        detailLabel.ForeColor = Color.FromArgb(190, 70, 70);
+
+        SetProgress(
+            totalBytes > 0
+                ? (int)Math.Min(
+                    100,
+                    completedBytes * 100L / totalBytes)
+                : 0);
+
+        ShowOperationSummary(result);
+    }
+    finally
+    {
+        cts.Dispose();
+        cts = null;
+
+        running = false;
+        destroyButton.Enabled = selectedItems.Count > 0;
+    }
+}
 
     private void SetControlsRunning(bool active)
     {
@@ -2019,52 +2540,210 @@ internal sealed class SettingsForm : Form
     private readonly CheckBox confirm = new();
     private readonly CheckBox autoUpdate = new();
     private readonly CheckBox protectSystem = new();
+    private readonly CheckBox protectSystemDrive = new();
+    private readonly CheckBox skipReparsePoints = new();
     private readonly CheckBox keepLogs = new();
     private readonly ComboBox language = new();
+
+    private readonly ListBox protectedPaths = new();
+    private readonly Button addProtectedPath = new();
+    private readonly Button removeProtectedPath = new();
 
     public SettingsForm()
     {
         Text = L.T("Ayarlar", "Settings");
-        ClientSize = new Size(390, 300);
+        ClientSize = new Size(520, 500);
         StartPosition = FormStartPosition.CenterParent;
         FormBorderStyle = FormBorderStyle.FixedDialog;
-        MaximizeBox = false; MinimizeBox = false;
+        MaximizeBox = false;
+        MinimizeBox = false;
         Font = new Font("Segoe UI", 9F);
         BackColor = Color.FromArgb(244, 247, 250);
 
-        Label title = new() { Text = L.T("VoidErase Ayarları", "VoidErase Settings"), Font = new Font("Segoe UI", 14F, FontStyle.Bold), ForeColor = Color.FromArgb(31,42,52) };
-        title.SetBounds(24, 20, 330, 28);
-        Label langLabel = new() { Text = L.T("Dil", "Language"), ForeColor = Color.FromArgb(101,115,130) };
+        Label title = new()
+        {
+            Text = L.T("VoidErase Ayarları", "VoidErase Settings"),
+            Font = new Font("Segoe UI", 14F, FontStyle.Bold),
+            ForeColor = Color.FromArgb(31, 42, 52)
+        };
+        title.SetBounds(24, 20, 420, 28);
+
+        Label langLabel = new()
+        {
+            Text = L.T("Dil", "Language"),
+            ForeColor = Color.FromArgb(101, 115, 130)
+        };
         langLabel.SetBounds(24, 65, 100, 22);
+
         language.SetBounds(145, 62, 210, 28);
         language.DropDownStyle = ComboBoxStyle.DropDownList;
         language.Items.AddRange(new object[] { "Türkçe", "English" });
         language.SelectedIndex = L.Turkish ? 0 : 1;
 
-        confirm.Text = L.T("Silmeden önce onay iste", "Ask for confirmation before erasing");
-        confirm.Checked = L.ConfirmBeforeErase; confirm.SetBounds(24, 108, 330, 24);
-        autoUpdate.Text = L.T("Başlangıçta güncellemeleri kontrol et", "Check for updates at startup");
-        autoUpdate.Checked = L.AutoUpdate; autoUpdate.SetBounds(24, 140, 330, 24);
+        confirm.Text = L.T(
+            "Silmeden önce onay iste",
+            "Ask for confirmation before erasing");
+        confirm.Checked = L.ConfirmBeforeErase;
+        confirm.SetBounds(24, 108, 450, 24);
 
-        protectSystem.Text = L.T("Windows sistem klasörlerini koru", "Protect Windows system folders");
-        protectSystem.Checked = VoidEraseSettings.ProtectSystemPaths; protectSystem.SetBounds(24, 172, 330, 24);
-        keepLogs.Text = L.T("İşlem günlüklerini tut", "Keep operation logs");
-        keepLogs.Checked = VoidEraseSettings.KeepLogs; keepLogs.SetBounds(24, 204, 330, 24);
+        autoUpdate.Text = L.T(
+            "Başlangıçta güncellemeleri kontrol et",
+            "Check for updates at startup");
+        autoUpdate.Checked = L.AutoUpdate;
+        autoUpdate.SetBounds(24, 140, 450, 24);
 
-        Button ok = new() { Text = "OK" }; ok.SetBounds(190, 250, 80, 32); ok.DialogResult = DialogResult.OK;
-        Button cancel = new() { Text = L.T("İptal", "Cancel") }; cancel.SetBounds(280, 250, 80, 32); cancel.DialogResult = DialogResult.Cancel;
-        AcceptButton = ok; CancelButton = cancel;
-        Controls.AddRange(new Control[] { title, langLabel, language, confirm, autoUpdate, protectSystem, keepLogs, ok, cancel });
-        Shown += (_, _) => { };
+        protectSystem.Text = L.T(
+            "Windows sistem klasörlerini koru",
+            "Protect Windows system folders");
+        protectSystem.Checked = VoidEraseSettings.ProtectSystemPaths;
+        protectSystem.SetBounds(24, 172, 450, 24);
+
+        protectSystemDrive.Text = L.T(
+            "Sistem sürücüsü kökünü koru (örn. C:\\)",
+            "Protect system drive root (e.g. C:\\)");
+        protectSystemDrive.Checked = VoidEraseSettings.ProtectSystemDrive;
+        protectSystemDrive.SetBounds(24, 204, 450, 24);
+
+        skipReparsePoints.Text = L.T(
+            "Junction / symlink öğelerini atla ve devam et",
+            "Skip junction / symlink items and continue");
+        skipReparsePoints.Checked = VoidEraseSettings.SkipReparsePoints;
+        skipReparsePoints.SetBounds(24, 236, 450, 24);
+
+        Label protectedLabel = new()
+        {
+            Text = L.T(
+                "Kullanıcı korumalı yolları",
+                "User protected paths"),
+            Font = new Font("Segoe UI", 9F, FontStyle.Bold),
+            ForeColor = Color.FromArgb(55, 69, 82)
+        };
+        protectedLabel.SetBounds(24, 272, 300, 22);
+
+        protectedPaths.SetBounds(24, 298, 350, 105);
+        protectedPaths.HorizontalScrollbar = true;
+        protectedPaths.SelectionMode = SelectionMode.One;
+
+        foreach (string path in VoidEraseSettings.ProtectedPaths)
+            protectedPaths.Items.Add(path);
+
+        addProtectedPath.Text = L.T("Ekle", "Add");
+        addProtectedPath.SetBounds(385, 298, 100, 32);
+        addProtectedPath.Click += (_, _) => AddProtectedPath();
+
+        removeProtectedPath.Text = L.T("Kaldır", "Remove");
+        removeProtectedPath.SetBounds(385, 338, 100, 32);
+        removeProtectedPath.Click += (_, _) => RemoveProtectedPath();
+
+        keepLogs.Text = L.T(
+            "İşlem günlüklerini tut",
+            "Keep operation logs");
+        keepLogs.Checked = VoidEraseSettings.KeepLogs;
+        keepLogs.SetBounds(24, 420, 450, 24);
+
+        Button ok = new()
+        {
+            Text = "OK",
+            DialogResult = DialogResult.OK
+        };
+        ok.SetBounds(300, 455, 80, 32);
+
+        Button cancel = new()
+        {
+            Text = L.T("İptal", "Cancel"),
+            DialogResult = DialogResult.Cancel
+        };
+        cancel.SetBounds(390, 455, 95, 32);
+
+        AcceptButton = ok;
+        CancelButton = cancel;
+
+        Controls.AddRange(new Control[]
+        {
+            title,
+            langLabel,
+            language,
+            confirm,
+            autoUpdate,
+            protectSystem,
+            protectSystemDrive,
+            skipReparsePoints,
+            protectedLabel,
+            protectedPaths,
+            addProtectedPath,
+            removeProtectedPath,
+            keepLogs,
+            ok,
+            cancel
+        });
+
         FormClosing += (_, _) =>
         {
-            if (DialogResult != DialogResult.OK) return;
+            if (DialogResult != DialogResult.OK)
+                return;
+
             L.SetLanguage(language.SelectedIndex == 0);
             L.SaveSettings(confirm.Checked, autoUpdate.Checked);
-            VoidEraseSettings.ProtectSystemPaths = protectSystem.Checked;
-            VoidEraseSettings.KeepLogs = keepLogs.Checked;
+
+            VoidEraseSettings.ProtectSystemPaths =
+                protectSystem.Checked;
+
+            VoidEraseSettings.ProtectSystemDrive =
+                protectSystemDrive.Checked;
+
+            VoidEraseSettings.SkipReparsePoints =
+                skipReparsePoints.Checked;
+
+            VoidEraseSettings.KeepLogs =
+                keepLogs.Checked;
+
+            VoidEraseSettings.SetProtectedPaths(
+                protectedPaths.Items
+                    .Cast<string>()
+                    .ToArray());
+
             Program.UpdateContextMenuLanguage();
         };
+    }
+
+    private void AddProtectedPath()
+    {
+        using FolderBrowserDialog dlg = new()
+        {
+            Description = L.T(
+                "Korunacak klasörü seçin",
+                "Select a folder to protect")
+        };
+
+        if (dlg.ShowDialog(this) != DialogResult.OK)
+            return;
+
+        string path = dlg.SelectedPath;
+
+        foreach (string existing in protectedPaths.Items.Cast<string>())
+        {
+            if (string.Equals(
+                    existing,
+                    path,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+        }
+
+        protectedPaths.Items.Add(path);
+        protectedPaths.SelectedIndex =
+            protectedPaths.Items.Count - 1;
+    }
+
+    private void RemoveProtectedPath()
+    {
+        int index = protectedPaths.SelectedIndex;
+
+        if (index < 0)
+            return;
+
+        protectedPaths.Items.RemoveAt(index);
     }
 }
 

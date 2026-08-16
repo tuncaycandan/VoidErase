@@ -1,5 +1,6 @@
 using System;
 using System.Drawing;
+using System.Linq;
 using System.Windows.Forms;
 
 namespace VoidErase;
@@ -8,17 +9,17 @@ internal sealed class OperationSummaryForm : Form
 {
     public OperationSummaryForm(OperationResult result, bool english)
     {
-        Text = english ? "Operation completed" : "İşlem tamamlandı";
+        Text = english ? "Operation summary" : "İşlem özeti";
         StartPosition = FormStartPosition.CenterParent;
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
         MinimizeBox = false;
-        ClientSize = new Size(500, 380);
+        ClientSize = new Size(620, 520);
         BackColor = Color.FromArgb(244, 247, 250);
 
         var title = new Label
         {
-            Text = english ? "Operation completed" : "İşlem tamamlandı",
+            Text = english ? "Operation summary" : "İşlem özeti",
             Font = new Font("Segoe UI", 16, FontStyle.Bold),
             ForeColor = Color.FromArgb(24, 42, 61),
             AutoSize = true,
@@ -54,6 +55,7 @@ internal sealed class OperationSummaryForm : Form
                   $"Total size: {FormatSize(result.TotalBytes)}\r\n" +
                   $"Successful: {result.Successful:N0}\r\n" +
                   $"Failed: {result.Failed:N0}\r\n" +
+                  $"Skipped: {result.Skipped:N0}\r\n" +
                   $"Verified: {result.Verified:N0}\r\n" +
                   $"Cancelled: {(result.Cancelled ? "Yes" : "No")}\r\n\r\n" +
                   "Method: AES-256-GCM + SHA-256 verification"
@@ -64,6 +66,7 @@ internal sealed class OperationSummaryForm : Form
                   $"Toplam boyut: {FormatSize(result.TotalBytes)}\r\n" +
                   $"Başarılı: {result.Successful:N0}\r\n" +
                   $"Başarısız: {result.Failed:N0}\r\n" +
+                  $"Atlanan: {result.Skipped:N0}\r\n" +
                   $"Doğrulanan: {result.Verified:N0}\r\n" +
                   $"İptal edildi: {(result.Cancelled ? "Evet" : "Hayır")}\r\n\r\n" +
                   "Yöntem: AES-256-GCM + SHA-256 doğrulama",
@@ -74,17 +77,65 @@ internal sealed class OperationSummaryForm : Form
         };
         Controls.Add(body);
 
+        var listLabel = new Label
+        {
+            Text = english
+                ? "Details"
+                : "Ayrıntılar",
+            Font = new Font("Segoe UI", 10, FontStyle.Bold),
+            ForeColor = Color.FromArgb(24, 42, 61),
+            AutoSize = true,
+            Location = new Point(30, 300)
+        };
+        Controls.Add(listLabel);
+
+        var list = new ListBox
+        {
+            Location = new Point(30, 325),
+            Size = new Size(560, 125),
+            HorizontalScrollbar = true,
+            Font = new Font("Segoe UI", 9)
+        };
+
+        AddItems(
+            list,
+            english ? "SUCCESS" : "BAŞARILI",
+            result.SuccessfulFiles);
+
+        AddItems(
+            list,
+            english ? "FAILED" : "BAŞARISIZ",
+            result.FailedFiles);
+
+        AddItems(
+            list,
+            english ? "SKIPPED" : "ATLANDI",
+            result.SkippedFiles);
+
+        Controls.Add(list);
+
         var close = new Button
         {
             Text = english ? "Close" : "Kapat",
             DialogResult = DialogResult.OK,
             FlatStyle = FlatStyle.System,
             Size = new Size(100, 34),
-            Location = new Point(370, 325)
+            Location = new Point(490, 465)
         };
 
         Controls.Add(close);
         AcceptButton = close;
+    }
+
+    private static void AddItems(
+        ListBox list,
+        string category,
+        System.Collections.Generic.IEnumerable<string> files)
+    {
+        foreach (string file in files)
+        {
+            list.Items.Add($"{category}: {file}");
+        }
     }
 
     private static string FormatSize(long bytes)
