@@ -2,6 +2,9 @@
 
 Secure Windows file/folder destruction utility.
 
+## Version
+Current release: **v1.1.0**
+
 ## Features
 - AES-256-GCM processing with SHA-256 verification
 - File and recursive folder selection
@@ -13,7 +16,12 @@ Secure Windows file/folder destruction utility.
 - GitHub release updater
 
 ## Safety
-System and Program Files trees are protected by default. Source deletion should only occur after successful verification. Failed items prevent parent folder cleanup.
+- Windows and Program Files trees are protected by default.
+- Source files are deleted only after successful encryption and container verification.
+- Failed or inaccessible items prevent unsafe parent-folder cleanup.
+- Temporary destruction containers are cleaned up when an operation fails or is cancelled.
+- System files are not processed.
+- File and folder operations support cancellation without intentionally deleting the original source before verification succeeds.
 
 ## ScreenShot
 ![VoidErase Main Window](ss.PNG)
