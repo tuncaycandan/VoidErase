@@ -443,63 +443,285 @@ internal static class Program
         CryptoCompat.ZeroMemory(tag);
     }
 
-    internal static void DestroyPath(string path, IProgressReporter form)
+internal static void DestroyPath(string path, IProgressReporter form)
+{
+    form.ThrowIfCancellationRequested();
+
+    if (File.Exists(path))
     {
-        if (Directory.Exists(path))
+        FileAttributes attributes = File.GetAttributes(path);
+
+        // Reparse point olan dosyalara da takip etmeden doğrudan müdahale etmiyoruz.
+        if ((attributes & FileAttributes.ReparsePoint) != 0)
         {
-            DestroyDirectory(path, form);
-            return;
+            throw new InvalidOperationException(
+                L.T(
+                    "Sembolik bağlantı veya reparse point olan öğeler üzerinde işlem yapılmıyor.",
+                    "Symbolic links and reparse-point items are not processed."));
         }
 
         DestroyFile(path, form);
+        return;
     }
 
-    private static void DestroyDirectory(string directory, IProgressReporter form)
+    if (Directory.Exists(path))
     {
-        string[] files = Directory.EnumerateFiles(directory, "*", SearchOption.AllDirectories).ToArray();
-        long totalBytes = 0;
-        foreach (string file in files)
+        DirectoryInfo directoryInfo = new DirectoryInfo(path);
+
+        // Junction / symbolic link / diğer reparse point klasörleri takip edilmez.
+        if ((directoryInfo.Attributes & FileAttributes.ReparsePoint) != 0)
         {
-            form.ThrowIfCancellationRequested();
-            try { totalBytes += new FileInfo(file).Length; }
-            catch { }
+            throw new InvalidOperationException(
+                L.T(
+                    "Sembolik bağlantı veya junction olan klasörler üzerinde işlem yapılmıyor.",
+                    "Symbolic-link or junction directories are not processed."));
         }
 
-        if (files.Length == 0)
-        {
-            Directory.Delete(directory, false);
-            return;
-        }
-
-        long completedBytes = 0;
-        Stopwatch overall = Stopwatch.StartNew();
-        for (int i = 0; i < files.Length; i++)
-        {
-            form.ThrowIfCancellationRequested();
-            string file = files[i];
-            long fileSize = 0;
-            try { fileSize = new FileInfo(file).Length; } catch { }
-
-            form.ReportProgress(completedBytes, Math.Max(totalBytes, 1), overall.Elapsed);
-            DestroyFile(file, new OffsetProgressReporter(form, completedBytes, fileSize, totalBytes));
-            completedBytes += fileSize;
-            form.ReportProgress(completedBytes, Math.Max(totalBytes, 1), overall.Elapsed);
-        }
-
-        // Dosyalar kaldırıldıktan sonra klasör ağacını alttan üste sil.
-        string[] directories = Directory.EnumerateDirectories(directory, "*", SearchOption.AllDirectories)
-            .OrderByDescending(d => d.Length).ToArray();
-        foreach (string subdir in directories)
-        {
-            form.ThrowIfCancellationRequested();
-            if (Directory.Exists(subdir) && !Directory.EnumerateFileSystemEntries(subdir).Any())
-                Directory.Delete(subdir, false);
-        }
-
-        if (Directory.Exists(directory) && !Directory.EnumerateFileSystemEntries(directory).Any())
-            Directory.Delete(directory, false);
+        DestroyDirectory(path, form);
+        return;
     }
 
+    throw new FileNotFoundException(
+        L.T("Dosya veya klasör bulunamadı.", "File or folder not found."),
+        path);
+}
+
+private static void DestroyDirectory(
+    string directory,
+    IProgressReporter form)
+{
+    form.ThrowIfCancellationRequested();
+
+    DirectoryInfo root = new DirectoryInfo(directory);
+
+    if ((root.Attributes & FileAttributes.ReparsePoint) != 0)
+    {
+        throw new InvalidOperationException(
+            L.T(
+                "Sembolik bağlantı veya junction olan klasörler üzerinde işlem yapılmıyor.",
+                "Symbolic-link or junction directories are not processed."));
+    }
+
+    List<string> files = new List<string>();
+    List<string> directories = new List<string>();
+
+    // Önce ağacı kendimiz dolaşıyoruz.
+    // Directory.EnumerateFiles(..., AllDirectories) yerine explicit traversal
+    // kullanarak reparse point'leri takip etmiyoruz.
+    Stack<string> pending = new Stack<string>();
+    pending.Push(directory);
+
+    while (pending.Count > 0)
+    {
+        form.ThrowIfCancellationRequested();
+
+        string current = pending.Pop();
+
+        string[] entries;
+
+        try
+        {
+            entries = Directory.GetFileSystemEntries(current);
+        }
+        catch (UnauthorizedAccessException ex)
+        {
+            throw new UnauthorizedAccessException(
+                L.T(
+                    "Klasöre erişim izni yok:\n" + current,
+                    "Access denied:\n" + current),
+                ex);
+        }
+        catch (IOException ex)
+        {
+            throw new IOException(
+                L.T(
+                    "Klasör okunamadı:\n" + current,
+                    "Directory could not be read:\n" + current),
+                ex);
+        }
+
+        foreach (string entry in entries)
+        {
+            form.ThrowIfCancellationRequested();
+
+            FileAttributes attributes;
+
+            try
+            {
+                attributes = File.GetAttributes(entry);
+            }
+            catch (Exception ex) when (
+                ex is IOException ||
+                ex is UnauthorizedAccessException)
+            {
+                throw new IOException(
+                    L.T(
+                        "Dosya veya klasör özellikleri okunamadı:\n" + entry,
+                        "File or directory attributes could not be read:\n" + entry),
+                    ex);
+            }
+
+            // Junction, symbolic link veya başka bir reparse point:
+            // içine kesinlikle girmiyoruz.
+            if ((attributes & FileAttributes.ReparsePoint) != 0)
+            {
+                throw new InvalidOperationException(
+                    L.T(
+                        "Sembolik bağlantı veya junction içeren klasörler güvenlik nedeniyle işlenmiyor:\n" + entry,
+                        "Directories containing symbolic links or junctions are not processed for safety:\n" + entry));
+            }
+
+            if ((attributes & FileAttributes.Directory) != 0)
+            {
+                directories.Add(entry);
+                pending.Push(entry);
+            }
+            else
+            {
+                files.Add(entry);
+            }
+        }
+    }
+
+    long totalBytes = 0;
+
+    foreach (string file in files)
+    {
+        form.ThrowIfCancellationRequested();
+
+        try
+        {
+            FileInfo info = new FileInfo(file);
+
+            if ((info.Attributes & FileAttributes.System) != 0)
+            {
+                throw new InvalidOperationException(
+                    L.T(
+                        "Sistem dosyaları üzerinde işlem yapılmıyor:\n" + file,
+                        "System files are not processed:\n" + file));
+            }
+
+            if ((info.Attributes & FileAttributes.ReparsePoint) != 0)
+            {
+                throw new InvalidOperationException(
+                    L.T(
+                        "Sembolik bağlantı veya reparse point olan dosya işlenmiyor:\n" + file,
+                        "Symbolic-link or reparse-point files are not processed:\n" + file));
+            }
+
+            totalBytes += info.Length;
+        }
+        catch (FileNotFoundException)
+        {
+            throw;
+        }
+        catch (UnauthorizedAccessException)
+        {
+            throw;
+        }
+        catch (IOException)
+        {
+            throw;
+        }
+    }
+
+    if (files.Count == 0)
+    {
+        // Boş klasör.
+        if (Directory.Exists(directory))
+            Directory.Delete(directory, false);
+
+        return;
+    }
+
+    long completedBytes = 0;
+    Stopwatch overall = Stopwatch.StartNew();
+
+    foreach (string file in files)
+    {
+        form.ThrowIfCancellationRequested();
+
+        long fileSize;
+
+        try
+        {
+            fileSize = new FileInfo(file).Length;
+        }
+        catch (Exception ex) when (
+            ex is IOException ||
+            ex is UnauthorizedAccessException)
+        {
+            throw new IOException(
+                L.T(
+                    "Dosya boyutu okunamadı:\n" + file,
+                    "File size could not be read:\n" + file),
+                ex);
+        }
+
+        form.ReportProgress(
+            completedBytes,
+            Math.Max(totalBytes, 1),
+            overall.Elapsed);
+
+        DestroyFile(
+            file,
+            new OffsetProgressReporter(
+                form,
+                completedBytes,
+                fileSize,
+                totalBytes));
+
+        completedBytes += fileSize;
+
+        form.ReportProgress(
+            completedBytes,
+            Math.Max(totalBytes, 1),
+            overall.Elapsed);
+    }
+
+    // Alt klasörleri sondan başa doğru sil.
+    directories
+        .OrderByDescending(d => d.Length)
+        .ToList()
+        .ForEach(subdir =>
+        {
+            form.ThrowIfCancellationRequested();
+
+            if (!Directory.Exists(subdir))
+                return;
+
+            DirectoryInfo info = new DirectoryInfo(subdir);
+
+            if ((info.Attributes & FileAttributes.ReparsePoint) != 0)
+            {
+                throw new InvalidOperationException(
+                    L.T(
+                        "Reparse point klasör silme aşamasında tespit edildi:\n" + subdir,
+                        "A reparse-point directory was detected during deletion:\n" + subdir));
+            }
+
+            if (!Directory.EnumerateFileSystemEntries(subdir).Any())
+                Directory.Delete(subdir, false);
+        });
+
+    form.ThrowIfCancellationRequested();
+
+    if (Directory.Exists(directory))
+    {
+        DirectoryInfo finalRoot = new DirectoryInfo(directory);
+
+        if ((finalRoot.Attributes & FileAttributes.ReparsePoint) != 0)
+        {
+            throw new InvalidOperationException(
+                L.T(
+                    "Ana klasör reparse point olarak değiştiği için silme durduruldu.",
+                    "Deletion stopped because the root directory became a reparse point."));
+        }
+
+        if (!Directory.EnumerateFileSystemEntries(directory).Any())
+            Directory.Delete(directory, false);
+    }
+}
     private sealed class OffsetProgressReporter : IProgressReporter
     {
         private readonly IProgressReporter inner;
@@ -884,11 +1106,14 @@ internal sealed class ShellDestroyForm : Form, IProgressReporter
     Activate();
     BringToFront();
 
-    cts = new CancellationTokenSource();
+   cts = new CancellationTokenSource();
 
-    cancel.Enabled = true;
-    status.Text = L.T("Hazırlanıyor...", "Preparing...");
-    detail.Text = Path.GetFileName(file);
+DateTime operationStartedAt = DateTime.Now;
+Stopwatch operationTimer = Stopwatch.StartNew();
+
+cancel.Enabled = true;
+status.Text = L.T("Hazırlanıyor...", "Preparing...");
+detail.Text = Path.GetFileName(file);
 
     int totalFiles = 0;
     long totalBytes = 0;
@@ -949,15 +1174,19 @@ internal sealed class ShellDestroyForm : Form, IProgressReporter
 
         cancel.Enabled = false;
 
-        OperationResult operationResult = new OperationResult
-        {
-            TotalFiles = totalFiles,
-            TotalBytes = totalBytes,
-            Successful = totalFiles,
-            Failed = 0,
-            Verified = totalFiles,
-            Cancelled = false
-        };
+     OperationResult operationResult = new OperationResult
+{
+    TargetPath = file,
+    StartedAt = operationStartedAt,
+    Elapsed = operationTimer.Elapsed,
+
+    TotalFiles = totalFiles,
+    TotalBytes = totalBytes,
+    Successful = totalFiles,
+    Failed = 0,
+    Verified = totalFiles,
+    Cancelled = false
+};
 
         using (OperationSummaryForm summary =
             new OperationSummaryForm(
