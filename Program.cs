@@ -1426,22 +1426,22 @@ internal sealed class MainForm : Form, IProgressReporter
         subtitleLabel.Text = L.T("Dosyalarınızı kalıcı olarak silin.", "Permanently erase your files.");
         subtitleLabel.ForeColor = TextSecondary;
 
-        settingsButton.SetBounds(446, 22, 34, 34);
-        settingsButton.Text = "⚙";
-        settingsButton.Font = new Font("Segoe UI Symbol", 12F);
-        StyleButton(settingsButton, CardColor, TextPrimary, false);
-        settingsButton.FlatAppearance.BorderColor = CardBorder;
-        settingsButton.Click += (_, _) => OpenSettings();
-        registryToolTip.SetToolTip(settingsButton, L.T("Ayarlar", "Settings"));
+        settingsButton.SetBounds(500, 22, 34, 30);
+settingsButton.Text = "⚙";
+settingsButton.Font = new Font("Segoe UI Symbol", 12F);
+StyleButton(settingsButton, CardColor, TextPrimary, false);
+settingsButton.FlatAppearance.BorderColor = CardBorder;
+settingsButton.Click += (_, _) => OpenSettings();
+registryToolTip.SetToolTip(settingsButton, L.T("Ayarlar", "Settings"));
 
-        updateButton.SetBounds(486, 22, 100, 34);
-        updateButton.Text = L.T("Güncelleme", "Update");
-        StyleButton(updateButton, CardColor, TextPrimary, false);
-        updateButton.FlatAppearance.BorderColor = CardBorder;
-        updateButton.Click += async (_, _) => await CheckForUpdatesAsync(true);
+updateButton.SetBounds(541, 22, 100, 30);
+updateButton.Text = L.T("Güncelleme", "Update");
+StyleButton(updateButton, CardColor, TextPrimary, false);
+updateButton.FlatAppearance.BorderColor = CardBorder;
+updateButton.Click += async (_, _) => await CheckForUpdatesAsync(true);
 
-        languageButton.SetBounds(592, 22, 104, 34);
-        languageButton.Text = L.T("English", "Türkçe");
+        languageButton.SetBounds(648, 22, 48, 30);
+        languageButton.Text = L.T("EN", "TR");
         StyleButton(languageButton, Accent, Color.White, true);
         languageButton.Click += (_, _) =>
         {
@@ -1599,7 +1599,7 @@ internal sealed class MainForm : Form, IProgressReporter
     private void UpdateTexts()
     {
         subtitleLabel.Text = L.T("Dosyalarınızı kalıcı olarak silin.", "Permanently erase your files.");
-        languageButton.Text = L.T("English", "Türkçe");
+        languageButton.Text = L.T("EN", "TR");
         updateButton.Text = L.T("Güncelleme", "Update");
         destroyButton.Text = L.T("KALICI OLARAK SİL", "PERMANENT DELETE");
         cancelButton.Text = L.T("İptal", "Cancel");
@@ -1880,7 +1880,7 @@ ShowOperationSummary(result);
         if (updateCheckRunning || running) return;
         updateCheckRunning = true;
         string original = updateButton.Text;
-        if (interactive) { updateButton.Enabled = false; updateButton.Text = L.T("Kontrol ediliyor...", "Checking..."); }
+        if (interactive) { updateButton.Enabled = false; updateButton.Text = L.T("Kontrol...", "Checking..."); }
         try
         {
             using HttpClient client = new();
