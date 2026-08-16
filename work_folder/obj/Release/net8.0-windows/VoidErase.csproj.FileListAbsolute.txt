@@ -1,0 +1,15 @@
+C:\Users\TCZMA\Desktop\VoidErase_v1_COMPILEFIX6\work_folder\bin\Release\net8.0-windows\VoidErase.exe
+C:\Users\TCZMA\Desktop\VoidErase_v1_COMPILEFIX6\work_folder\bin\Release\net8.0-windows\VoidErase.deps.json
+C:\Users\TCZMA\Desktop\VoidErase_v1_COMPILEFIX6\work_folder\bin\Release\net8.0-windows\VoidErase.runtimeconfig.json
+C:\Users\TCZMA\Desktop\VoidErase_v1_COMPILEFIX6\work_folder\bin\Release\net8.0-windows\VoidErase.dll
+C:\Users\TCZMA\Desktop\VoidErase_v1_COMPILEFIX6\work_folder\bin\Release\net8.0-windows\VoidErase.pdb
+C:\Users\TCZMA\Desktop\VoidErase_v1_COMPILEFIX6\work_folder\obj\Release\net8.0-windows\VoidErase.GeneratedMSBuildEditorConfig.editorconfig
+C:\Users\TCZMA\Desktop\VoidErase_v1_COMPILEFIX6\work_folder\obj\Release\net8.0-windows\VoidErase.AssemblyInfoInputs.cache
+C:\Users\TCZMA\Desktop\VoidErase_v1_COMPILEFIX6\work_folder\obj\Release\net8.0-windows\VoidErase.AssemblyInfo.cs
+C:\Users\TCZMA\Desktop\VoidErase_v1_COMPILEFIX6\work_folder\obj\Release\net8.0-windows\VoidErase.csproj.CoreCompileInputs.cache
+C:\Users\TCZMA\Desktop\VoidErase_v1_COMPILEFIX6\work_folder\obj\Release\net8.0-windows\VoidErase.dll
+C:\Users\TCZMA\Desktop\VoidErase_v1_COMPILEFIX6\work_folder\obj\Release\net8.0-windows\refint\VoidErase.dll
+C:\Users\TCZMA\Desktop\VoidErase_v1_COMPILEFIX6\work_folder\obj\Release\net8.0-windows\VoidErase.pdb
+C:\Users\TCZMA\Desktop\VoidErase_v1_COMPILEFIX6\work_folder\obj\Release\net8.0-windows\VoidErase.genruntimeconfig.cache
+C:\Users\TCZMA\Desktop\VoidErase_v1_COMPILEFIX6\work_folder\obj\Release\net8.0-windows\ref\VoidErase.dll
+C:\Users\TCZMA\Desktop\VoidErase_v1_COMPILEFIX6\work_folder\obj\Release\net8.0-windows\VoidErase.csproj.Up2Date
