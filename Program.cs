@@ -823,97 +823,122 @@ internal sealed class ShellDestroyForm : Form, IProgressReporter
     }
 
     protected override async void OnShown(EventArgs e)
-    {
-        base.OnShown(e);
-
-        if (started) return;
-        started = true;
-
-        TopMost = true;
-        Activate();
-        BringToFront();
-
-        if (!File.Exists(file) && !Directory.Exists(file))
-        {
-            MessageBox.Show(this,
-                L.T("Dosya veya klasör bulunamadı:\n\n" + file,
-                    "File or folder not found:\n\n" + file),
-                L.T("Kalıcı Olarak Yok Et", "Permanent Delete"),
-                MessageBoxButtons.OK, MessageBoxIcon.Error);
-            Close();
-            return;
-        }
-
-        bool isDirectory = Directory.Exists(file);
-        string itemName = Path.GetFileName(file.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar));
-        string itemTypeTr = isDirectory ? "klasörü" : "dosyayı";
-        string itemTypeEn = isDirectory ? "folder" : "file";
-
-        DialogResult answer = MessageBox.Show(
-            this,
-            L.T($"Bu {itemTypeTr} kalıcı olarak silmek istediğinizden emin misiniz?\n\n" + itemName +
-                "\n\nBu işlem geri alınamaz.",
-                $"Are you sure you want to permanently delete this {itemTypeEn}?\n\n" + itemName +
-                "\n\nThis operation cannot be undone."),
-            L.T("Kalıcı Olarak Yok Et", "Permanent Delete"),
-            MessageBoxButtons.YesNo,
-            MessageBoxIcon.Warning,
-            MessageBoxDefaultButton.Button2);
-
-        if (answer != DialogResult.Yes)
-        {
-            Close();
-            return;
-        }
-
-        // Onaydan sonra aynı küçük pencerede gerçek ilerleme gösterilir.
-        Show();
-        WindowState = FormWindowState.Normal;
-        TopMost = true;
-        Activate();
-        BringToFront();
-
-      cts = new CancellationTokenSource();
-cancel.Enabled = true;
-status.Text = L.T("Hazırlanıyor...", "Preparing...");
-detail.Text = Path.GetFileName(file);
-
-int totalFiles = 0;
-long totalBytes = 0;
-
-try
 {
-    if (isDirectory)
+    base.OnShown(e);
+
+    if (started) return;
+    started = true;
+
+    TopMost = true;
+    Activate();
+    BringToFront();
+
+    if (!File.Exists(file) && !Directory.Exists(file))
     {
-        string[] files = Directory
-            .EnumerateFiles(file, "*", SearchOption.AllDirectories)
-            .ToArray();
+        MessageBox.Show(
+            this,
+            L.T(
+                "Dosya veya klasör bulunamadı:\n\n" + file,
+                "File or folder not found:\n\n" + file),
+            L.T("Kalıcı Olarak Yok Et", "Permanent Delete"),
+            MessageBoxButtons.OK,
+            MessageBoxIcon.Error);
 
-        totalFiles = files.Length;
+        Close();
+        return;
+    }
 
-        foreach (string item in files)
+    bool isDirectory = Directory.Exists(file);
+
+    string itemName = Path.GetFileName(
+        file.TrimEnd(
+            Path.DirectorySeparatorChar,
+            Path.AltDirectorySeparatorChar));
+
+    string itemTypeTr = isDirectory ? "klasörü" : "dosyayı";
+    string itemTypeEn = isDirectory ? "folder" : "file";
+
+    DialogResult answer = MessageBox.Show(
+        this,
+        L.T(
+            $"Bu {itemTypeTr} kalıcı olarak silmek istediğinizden emin misiniz?\n\n" +
+            itemName +
+            "\n\nBu işlem geri alınamaz.",
+            $"Are you sure you want to permanently delete this {itemTypeEn}?\n\n" +
+            itemName +
+            "\n\nThis operation cannot be undone."),
+        L.T("Kalıcı Olarak Yok Et", "Permanent Delete"),
+        MessageBoxButtons.YesNo,
+        MessageBoxIcon.Warning,
+        MessageBoxDefaultButton.Button2);
+
+    if (answer != DialogResult.Yes)
+    {
+        Close();
+        return;
+    }
+
+    Show();
+    WindowState = FormWindowState.Normal;
+    TopMost = true;
+    Activate();
+    BringToFront();
+
+    cts = new CancellationTokenSource();
+
+    cancel.Enabled = true;
+    status.Text = L.T("Hazırlanıyor...", "Preparing...");
+    detail.Text = Path.GetFileName(file);
+
+    int totalFiles = 0;
+    long totalBytes = 0;
+
+    try
+    {
+        if (isDirectory)
         {
-            try
+            string[] files = Directory
+                .EnumerateFiles(
+                    file,
+                    "*",
+                    SearchOption.AllDirectories)
+                .ToArray();
+
+            totalFiles = files.Length;
+
+            foreach (string item in files)
             {
-                totalBytes += new FileInfo(item).Length;
-            }
-            catch
-            {
+                cts.Token.ThrowIfCancellationRequested();
+
+                try
+                {
+                    totalBytes += new FileInfo(item).Length;
+                }
+                catch
+                {
+                    // Dosya işlem başlamadan önce erişilemez hale geldiyse
+                    // ana işlem sırasında ayrıca hata değerlendirilecektir.
+                }
             }
         }
-    }
-    else
-    {
-        totalFiles = 1;
-        totalBytes = new FileInfo(file).Length;
-    }
+        else
+        {
+            totalFiles = 1;
+            totalBytes = new FileInfo(file).Length;
+        }
 
-    await Task.Run(() => Program.DestroyPath(file, this), cts.Token);
+        await Task.Run(
+            () => Program.DestroyPath(file, this),
+            cts.Token);
 
-    if (!cts.IsCancellationRequested)
-    {
+        cts.Token.ThrowIfCancellationRequested();
+
         progress.Value = 100;
-        status.Text = L.T("Tamamlandı.", "Completed.");
+
+        status.Text = L.T(
+            "Tamamlandı.",
+            "Completed.");
+
         detail.Text = L.T(
             isDirectory
                 ? "Klasör ve içeriği başarıyla kalıcı olarak silindi."
@@ -935,39 +960,54 @@ try
         };
 
         using (OperationSummaryForm summary =
-            new OperationSummaryForm(operationResult, L.English))
+            new OperationSummaryForm(
+                operationResult,
+                L.English))
         {
             summary.ShowDialog(this);
         }
 
         Close();
     }
-}
-catch (OperationCanceledException)
-{
-	status.Text = L.T("İptal edildi.", "Cancelled.");
-            detail.Text = L.T("Orijinal dosya korunmuştur.", "The original file was preserved.");
-        }
-        catch (Exception ex)
-        {
-            status.Text = L.T("İşlem başarısız.", "Operation failed.");
-            detail.Text = L.T("Orijinal dosya korunmuş olabilir.", "The original file may have been preserved.");
+    catch (OperationCanceledException)
+    {
+        status.Text = L.T(
+            "İptal edildi.",
+            "Cancelled.");
 
-            MessageBox.Show(this,
-                L.T("İşlem başarısız oldu.\n\n" + ex.Message,
-                    "Operation failed.\n\n" + ex.Message),
-                L.T("Kalıcı Olarak Yok Et", "Permanent Delete"),
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Error);
-        }
-        finally
-        {
-            cts?.Dispose();
-            cts = null;
-            cancel.Enabled = false;
-        }
+        detail.Text = L.T(
+            "Orijinal dosya korunmuştur.",
+            "The original file was preserved.");
+
+        cancel.Enabled = false;
     }
+    catch (Exception ex)
+    {
+        status.Text = L.T(
+            "İşlem başarısız.",
+            "Operation failed.");
 
+        detail.Text = L.T(
+            "Orijinal dosya korunmuş olabilir.",
+            "The original file may have been preserved.");
+
+        cancel.Enabled = false;
+
+        MessageBox.Show(
+            this,
+            L.T(
+                "İşlem başarısız oldu.\n\n" + ex.Message,
+                "Operation failed.\n\n" + ex.Message),
+            L.T("Kalıcı Olarak Yok Et", "Permanent Delete"),
+            MessageBoxButtons.OK,
+            MessageBoxIcon.Error);
+    }
+    finally
+    {
+        cts?.Dispose();
+        cts = null;
+    }
+}
     public void ReportProgress(long processed, long total, TimeSpan elapsed)
     {
         if (IsDisposed) return;
@@ -1847,4 +1887,5 @@ internal static class ShellRefresh
             IntPtr.Zero);
     }
 }
+
 
