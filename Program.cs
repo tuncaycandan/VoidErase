@@ -1513,6 +1513,7 @@ internal sealed class MainForm : Form, IProgressReporter
     private readonly Button selectFileButton = new();
     private readonly Button selectFolderButton = new();
     private readonly Button destroyButton = new();
+	private readonly Label hint = new();
     private readonly Button cancelButton = new();
     private readonly Button registryButton = new();
     private readonly Button languageButton = new();
@@ -1715,12 +1716,11 @@ updateButton.Click += async (_, _) => await CheckForUpdatesAsync(true);
         registryButton.FlatAppearance.BorderColor = CardBorder;
         registryButton.Click += (_, _) => ToggleRegistry();
 
-        Label hint = new()
-        {
-            Text = L.T("Güvenli silme • AES-256-GCM", "Secure erasure • AES-256-GCM"),
-            ForeColor = TextSecondary,
-            TextAlign = ContentAlignment.MiddleRight
-        };
+        hint.Text = L.T(
+            "Güvenli silme • AES-256-GCM",
+            "Secure erasure • AES-256-GCM");
+        hint.ForeColor = TextSecondary;
+        hint.TextAlign = ContentAlignment.MiddleRight;
         hint.SetBounds(354, 414, 342, 34);
 
         Controls.AddRange(new Control[] { destroyButton, cancelButton, registryButton, hint });
@@ -1775,6 +1775,9 @@ updateButton.Click += async (_, _) => await CheckForUpdatesAsync(true);
         updateButton.Text = L.T("Güncelleme", "Update");
         destroyButton.Text = L.T("KALICI OLARAK SİL", "PERMANENT DELETE");
         cancelButton.Text = L.T("İptal", "Cancel");
+		hint.Text = L.T(
+    "Güvenli silme • AES-256-GCM",
+    "Secure erasure • AES-256-GCM");
         registryButton.Text = RegistryIsInstalled()
             ? L.T("Sağ Tık Menüsünü KALDIR", "REMOVE CONTEXT MENU")
             : L.T("Sağ Tık Menüsünü ETKİNLEŞTİR", "ENABLE CONTEXT MENU");
