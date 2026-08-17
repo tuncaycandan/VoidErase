@@ -60,6 +60,7 @@
       <SubType>Form</SubType>
     </Compile>
     <Compile Include="CryptoCompat.cs" />
+    <Compile Include="NistSanitization.cs" />
   </ItemGroup>
   <ItemGroup>
     <Content Include="VoidErase.ico">
