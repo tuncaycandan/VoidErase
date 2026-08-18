@@ -61,6 +61,7 @@
     </Compile>
     <Compile Include="CryptoCompat.cs" />
     <Compile Include="NistSanitization.cs" />
+    <Compile Include="MediaDetection.cs" />
   </ItemGroup>
   <ItemGroup>
     <Content Include="VoidErase.ico">
