@@ -613,8 +613,12 @@ private static void EnsurePathAllowed(string path)
     }
 }
 
-internal static int DestroyPath(string path, IProgressReporter form)
+internal static int DestroyPath(
+    string path,
+    IProgressReporter form,
+    out List<string> skippedFiles)
 {
+	skippedFiles = new List<string>();
     form.ThrowIfCancellationRequested();
 
     EnsurePathAllowed(path);
@@ -649,10 +653,22 @@ internal static int DestroyPath(string path, IProgressReporter form)
                     "Symbolic-link or junction directories are not processed."));
         }
 
-        int verifiedFiles;
-		DestroyDirectory(path, form, out verifiedFiles);
-		return verifiedFiles;
-    }
+int verifiedFiles;
+List<string> directorySkippedFiles;
+
+DestroyDirectory(
+    path,
+    form,
+    out verifiedFiles,
+    out directorySkippedFiles);
+
+if (directorySkippedFiles.Count > 0)
+{
+    skippedFiles.AddRange(directorySkippedFiles);
+}
+
+return verifiedFiles;
+}
 
     throw new FileNotFoundException(
         L.T("Dosya veya klasör bulunamadı.", "File or folder not found."),
@@ -662,9 +678,11 @@ internal static int DestroyPath(string path, IProgressReporter form)
 private static void DestroyDirectory(
     string directory,
     IProgressReporter form,
-    out int verifiedFiles)
+    out int verifiedFiles,
+    out List<string> skippedFiles)
 {
 	verifiedFiles = 0;
+	skippedFiles = new List<string>();
     form.ThrowIfCancellationRequested();
 
     DirectoryInfo root = new DirectoryInfo(directory);
@@ -699,13 +717,13 @@ private static void DestroyDirectory(
             entries = Directory.GetFileSystemEntries(current);
         }
         catch (UnauthorizedAccessException ex)
-        {
-            throw new UnauthorizedAccessException(
-                L.T(
-                    "Klasöre erişim izni yok:\n" + current,
-                    "Access denied:\n" + current),
-                ex);
-        }
+{
+    throw new UnauthorizedAccessException(
+        L.T(
+            "Klasöre erişim izni yok:\n" + current,
+            "Access denied:\n" + current),
+        ex);
+}
         catch (IOException ex)
         {
             throw new IOException(
@@ -758,11 +776,14 @@ private static void DestroyDirectory(
 }
 else
 {
-    // Gizli dosyalar ayardan bağımsız olarak varsayılan şekilde korunur.
-    // "Gizli dosyaları sil" açıksa listeye dahil edilir.
     if ((attributes & FileAttributes.Hidden) != 0 &&
         !VoidEraseSettings.DeleteHiddenFiles)
     {
+        skippedFiles.Add(
+            entry + " — " +
+            L.T(
+                "Gizli dosya ayarlarda korunuyor.",
+                "Hidden file is protected by the current setting."));
         continue;
     }
 
@@ -1436,9 +1457,31 @@ detail.Text = Path.GetFileName(file);
 			operationFiles.Add(file);
         }
 
-        int verifiedCount = await Task.Run(
-			() => Program.DestroyPath(file, this),
-			cts.Token);
+        List<string> skippedFiles = new List<string>();
+
+int verifiedCount = await Task.Run(
+    () =>
+    {
+        int count = Program.DestroyPath(
+            file,
+            this,
+            out skippedFiles);
+
+        return count;
+    },
+    cts.Token);
+	if (skippedFiles.Count > 0)
+{
+    
+
+    foreach (string skippedFile in skippedFiles)
+    {
+        HistoryStore.Append(
+            skippedFile,
+            0,
+            "SKIPPED");
+    }
+}
 
         cts.Token.ThrowIfCancellationRequested();
 
@@ -1464,18 +1507,19 @@ OperationResult operationResult = new OperationResult
     StartedAt = operationStartedAt,
     Elapsed = operationTimer.Elapsed,
 
-    TotalFiles = totalFiles,
-    TotalBytes = totalBytes,
-    Successful = totalFiles,
-    Failed = 0,
-    Skipped = 0,
-    Verified = verifiedCount,
-	VerificationCompleted = verifiedCount == totalFiles,
-	KeyDestructionCompleted = verifiedCount == totalFiles,
+  TotalFiles = totalFiles + skippedFiles.Count,
+	TotalBytes = totalBytes,
+	Successful = totalFiles,
+	Failed = 0,
+	Skipped = skippedFiles.Count,
+	Verified = verifiedCount,
+	VerificationCompleted = skippedFiles.Count == 0 && verifiedCount == totalFiles,
+	KeyDestructionCompleted = skippedFiles.Count == 0 && verifiedCount == totalFiles,
 	Cancelled = false
 };
 
 operationResult.SuccessfulFiles.AddRange(operationFiles);
+operationResult.SkippedFiles.AddRange(skippedFiles);
 
 if (!isDirectory)
 {
@@ -2069,9 +2113,10 @@ private IEnumerable<string> ExpandFilesForSummary(string directory)
     }
 }
 
-    private List<string> ExpandSelectedFiles()
+  private List<string> ExpandSelectedFiles(out List<string> skippedFiles)
 {
     var files = new List<string>();
+    skippedFiles = new List<string>();
 
     foreach (string item in selectedItems)
     {
@@ -2131,9 +2176,15 @@ private IEnumerable<string> ExpandFilesForSummary(string directory)
                     pending.Push(entry);
                 }
                 else
-                {
-                    files.Add(entry);
-                }
+{
+    if ((attributes & FileAttributes.Hidden) != 0 &&
+        !VoidEraseSettings.DeleteHiddenFiles)
+    {
+        continue;
+    }
+
+    files.Add(entry);
+}
             }
         }
     }
@@ -2203,13 +2254,14 @@ private void formSafeReportProgress(
     Stopwatch operationTimer = Stopwatch.StartNew();
 
     List<string> files;
+List<string> skippedFiles;
 
-    try
-    {
-        files = ExpandSelectedFiles()
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToList();
-    }
+try
+{
+    files = ExpandSelectedFiles(out skippedFiles)
+        .Distinct(StringComparer.OrdinalIgnoreCase)
+        .ToList();
+}
     catch (Exception ex)
     {
         MessageBox.Show(
@@ -2340,16 +2392,21 @@ var result = new OperationResult
             {
                 throw;
             }
-            catch (UnauthorizedAccessException)
-            {
-                result.Skipped++;
-                result.SkippedFiles.Add(file);
+catch (UnauthorizedAccessException)
+{
+    result.Skipped++;
 
-                HistoryStore.Append(
-                    file,
-                    fileSize,
-                    "SKIPPED");
-            }
+    result.SkippedFiles.Add(
+        file + " — " +
+        L.T(
+            "Erişim izni yok.",
+            "Access denied."));
+
+    HistoryStore.Append(
+        file,
+        fileSize,
+        "SKIPPED");
+}
             catch (InvalidOperationException ex)
             {
                 // Reparse point / sistem dosyası gibi güvenlik nedeniyle
@@ -2363,29 +2420,21 @@ var result = new OperationResult
                     fileSize,
                     "SKIPPED");
             }
-            catch (IOException)
-            {
-                // Dosya okunamıyor, kilitli veya işlem sırasında erişilemiyor.
-                // Diğer dosyaların işlenmesine devam edilir.
-                result.Failed++;
-                result.FailedFiles.Add(file);
+         catch (IOException ex)
+{
+    result.Failed++;
 
-                HistoryStore.Append(
-                    file,
-                    fileSize,
-                    "FAILED");
-            }
-            catch (Exception ex)
-            {
-                result.Failed++;
-                result.FailedFiles.Add(
-                    file + " — " + ex.Message);
+    result.FailedFiles.Add(
+        file + " — " +
+        L.T(
+            "G/Ç hatası: " + ex.Message,
+            "I/O error: " + ex.Message));
 
-                HistoryStore.Append(
-                    file,
-                    fileSize,
-                    "FAILED");
-            }
+    HistoryStore.Append(
+        file,
+        fileSize,
+        "FAILED");
+}
 
             completedBytes += fileSize;
 
