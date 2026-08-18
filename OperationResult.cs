@@ -5,7 +5,30 @@ namespace VoidErase;
 
 internal sealed class OperationResult
 {
-    public string TargetPath { get; set; } = "";
+    private string targetPath = "";
+
+    public string TargetPath
+    {
+        get => targetPath;
+        set
+        {
+            targetPath = value ?? "";
+
+            if (FileSystemPathCanBeClassified(targetPath))
+            {
+                MediaKind = MediaDetection.Detect(targetPath);
+                SanitizationDecision decision =
+                    NistSanitizationPlanner.ForFileOperation(MediaKind);
+
+                SanitizationMethod = decision.Method;
+                SanitizationAssurance = decision.Assurance;
+                SanitizationVerificationRequired = decision.VerificationRequired;
+                SanitizationReason = decision.Reason;
+                SanitizationRecommendation = decision.RecommendedAction;
+            }
+        }
+    }
+
     public DateTime StartedAt { get; set; }
     public TimeSpan Elapsed { get; set; }
 
@@ -32,4 +55,20 @@ internal sealed class OperationResult
     public List<string> SuccessfulFiles { get; } = new();
     public List<string> FailedFiles { get; } = new();
     public List<string> SkippedFiles { get; } = new();
+
+    private static bool FileSystemPathCanBeClassified(string path)
+    {
+        if (string.IsNullOrWhiteSpace(path))
+            return false;
+
+        try
+        {
+            return Path.IsPathFullyQualified(path) &&
+                   (File.Exists(path) || Directory.Exists(path));
+        }
+        catch
+        {
+            return false;
+        }
+    }
 }
