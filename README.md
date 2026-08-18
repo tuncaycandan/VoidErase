@@ -3,7 +3,7 @@
 Secure Windows file/folder destruction utility.
 
 ## Version
-Current release: **v1.1.0**
+Current release: **v1.2.1**
 
 ## Features
 - AES-256-GCM processing with SHA-256 verification
