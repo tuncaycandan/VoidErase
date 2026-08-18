@@ -3,7 +3,7 @@
 Secure Windows file/folder destruction utility.
 
 ## Version
-Current release: **v1.2.1**
+Current release: **[Latest Release](https://github.com/tuncaycandan/VoidErase/releases/latest)**
 
 ## Features
 - AES-256-GCM processing with SHA-256 verification
