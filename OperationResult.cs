@@ -64,7 +64,7 @@ internal sealed class OperationResult
 
         try
         {
-            return Path.IsPathFullyQualified(path) &&
+            return Path.IsPathRooted(path) &&
                    (File.Exists(path) || Directory.Exists(path));
         }
         catch
