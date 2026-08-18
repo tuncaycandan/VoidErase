@@ -35,10 +35,12 @@ internal static class L
     private const string ValueName = "Language";
     private const string ConfirmValue = "ConfirmBeforeErase";
     private const string AutoUpdateValue = "AutoUpdate";
+	private const string DeleteHiddenValue = "DeleteHiddenFiles";
+	private const string DeleteHiddenFilesValue = "DeleteHiddenFiles";
 
     public static bool ConfirmBeforeErase { get; private set; } = true;
     public static bool AutoUpdate { get; private set; } = true;
-
+	public static bool DeleteHiddenFiles { get; private set; } = false;
     public static bool Turkish { get; private set; }
 
     static L()
@@ -65,7 +67,11 @@ internal static class L
                     .Equals("tr", StringComparison.OrdinalIgnoreCase);
 
             ConfirmBeforeErase = ReadBool(key, ConfirmValue, true);
-            AutoUpdate = ReadBool(key, AutoUpdateValue, true);
+			AutoUpdate = ReadBool(key, AutoUpdateValue, true);
+			DeleteHiddenFiles = ReadBool(key, DeleteHiddenValue, false);
+
+			VoidEraseSettings.DeleteHiddenFiles = DeleteHiddenFiles;
+			DeleteHiddenFiles = ReadBool(key, DeleteHiddenFilesValue, false);
             _english = !Turkish;
         }
         catch
@@ -74,6 +80,8 @@ internal static class L
                 .Equals("tr", StringComparison.OrdinalIgnoreCase);
             ConfirmBeforeErase = true;
             AutoUpdate = true;
+			DeleteHiddenFiles = false;
+			VoidEraseSettings.DeleteHiddenFiles = false;
             _english = !Turkish;
         }
     }
@@ -84,15 +92,33 @@ internal static class L
         return value is int i ? i != 0 : fallback;
     }
 
-    public static void SaveSettings(bool confirmBeforeErase, bool autoUpdate)
-    {
-        ConfirmBeforeErase = confirmBeforeErase;
-        AutoUpdate = autoUpdate;
-        using RegistryKey key = Registry.CurrentUser.CreateSubKey(KeyPath, true)
-            ?? throw new InvalidOperationException("Settings could not be saved.");
-        key.SetValue(ConfirmValue, confirmBeforeErase ? 1 : 0, RegistryValueKind.DWord);
-        key.SetValue(AutoUpdateValue, autoUpdate ? 1 : 0, RegistryValueKind.DWord);
-    }
+   public static void SaveSettings(
+    bool confirmBeforeErase,
+    bool autoUpdate,
+    bool deleteHiddenFiles)
+{
+    ConfirmBeforeErase = confirmBeforeErase;
+    AutoUpdate = autoUpdate;
+    DeleteHiddenFiles = deleteHiddenFiles;
+
+    using RegistryKey key = Registry.CurrentUser.CreateSubKey(KeyPath, true)
+        ?? throw new InvalidOperationException("Settings could not be saved.");
+
+    key.SetValue(
+        ConfirmValue,
+        confirmBeforeErase ? 1 : 0,
+        RegistryValueKind.DWord);
+
+    key.SetValue(
+        AutoUpdateValue,
+        autoUpdate ? 1 : 0,
+        RegistryValueKind.DWord);
+
+    key.SetValue(
+        DeleteHiddenFilesValue,
+        deleteHiddenFiles ? 1 : 0,
+        RegistryValueKind.DWord);
+}
 
     public static void SetLanguage(bool turkish)
     {
@@ -140,6 +166,8 @@ internal static class Program
         string? file = null;
         bool install = false;
         bool uninstall = false;
+		bool mediaInfo = false;
+		string? mediaInfoPath = null;
 
         for (int i = 0; i < args.Length; i++)
         {
@@ -154,11 +182,56 @@ internal static class Program
                     if (!args[i].StartsWith("--", StringComparison.Ordinal))
                         file ??= args[i].Trim('"');
                     break;
+					case "--media-info":
+						mediaInfo = true;
+						if (i + 1 < args.Length)
+						mediaInfoPath = args[++i].Trim('"');
+					break;
             }
         }
 
         try
         {
+			if (mediaInfo)
+{
+    if (string.IsNullOrWhiteSpace(mediaInfoPath))
+    {
+        Console.WriteLine("Usage: VoidErase.exe --media-info <path>");
+        return;
+    }
+
+    MediaInfo media = MediaDetection.Detect(mediaInfoPath);
+SanitizationDecision decision = NistSanitization.Decide(media);
+
+string result =
+    "=== VoidErase Media / NIST Test ===\n\n" +
+    "Path: " + mediaInfoPath + "\n" +
+    "Drive: " + media.DriveLetter + "\n" +
+    "Kind: " + media.Kind + "\n" +
+    "Model: " + media.Model + "\n" +
+    "Bus: " + media.BusType + "\n" +
+    "Media type: " + media.MediaType + "\n" +
+    "System drive: " + media.IsSystemDrive + "\n" +
+    "Removable: " + media.IsRemovable + "\n" +
+    "Solid state: " + media.IsSolidState + "\n" +
+    "Virtual: " + media.IsVirtual + "\n\n" +
+    "=== Sanitization Decision ===\n\n" +
+    "Method: " + decision.Method + "\n" +
+	"Assurance: " + decision.Assurance + "\n" +
+	"Requires device command: " + decision.RequiresDeviceCommand + "\n" +
+	"Verification required: " + decision.VerificationRequired + "\n" +
+	"NIST aligned claim allowed: " + decision.NistAlignedClaimAllowed + "\n\n" +
+	"Reason:\n" + decision.Reason + "\n\n" +
+	"Recommendation:\n" + decision.Recommendation;
+
+MessageBox.Show(
+    result,
+    "VoidErase Media / NIST Test",
+    MessageBoxButtons.OK,
+    MessageBoxIcon.Information);
+
+return;
+}
             if (install)
             {
                 bool ok = InstallContextMenu(false);
@@ -281,7 +354,15 @@ internal static class Program
         FileInfo info = new(path);
         if ((info.Attributes & FileAttributes.System) != 0)
             throw new InvalidOperationException(L.T("Sistem dosyaları üzerinde işlem yapılmıyor.", "System files are not processed."));
+if ((info.Attributes & FileAttributes.Hidden) != 0)
+{
+    info.Attributes &= ~FileAttributes.Hidden;
+}
 
+if ((info.Attributes & FileAttributes.ReadOnly) != 0)
+{
+    info.Attributes &= ~FileAttributes.ReadOnly;
+}
         string temp = Path.Combine(info.DirectoryName!,
             "." + info.Name + "." + Guid.NewGuid().ToString("N") + ".destroying");
 
@@ -302,6 +383,8 @@ internal static class Program
         }
         finally
         {
+			// NIST SP 800-88 Rev. 2 uyarlaması:
+			// İşlem anahtarı kullanım sonrasında bellekten sıfırlanır.
             CryptoCompat.ZeroMemory(key);
             CryptoCompat.ZeroMemory(headerNonce);
         }
@@ -530,7 +613,7 @@ private static void EnsurePathAllowed(string path)
     }
 }
 
-internal static void DestroyPath(string path, IProgressReporter form)
+internal static int DestroyPath(string path, IProgressReporter form)
 {
     form.ThrowIfCancellationRequested();
 
@@ -550,7 +633,7 @@ internal static void DestroyPath(string path, IProgressReporter form)
         }
 
         DestroyFile(path, form);
-        return;
+		return 1;
     }
 
     if (Directory.Exists(path))
@@ -566,8 +649,9 @@ internal static void DestroyPath(string path, IProgressReporter form)
                     "Symbolic-link or junction directories are not processed."));
         }
 
-        DestroyDirectory(path, form);
-        return;
+        int verifiedFiles;
+		DestroyDirectory(path, form, out verifiedFiles);
+		return verifiedFiles;
     }
 
     throw new FileNotFoundException(
@@ -577,8 +661,10 @@ internal static void DestroyPath(string path, IProgressReporter form)
 
 private static void DestroyDirectory(
     string directory,
-    IProgressReporter form)
+    IProgressReporter form,
+    out int verifiedFiles)
 {
+	verifiedFiles = 0;
     form.ThrowIfCancellationRequested();
 
     DirectoryInfo root = new DirectoryInfo(directory);
@@ -666,14 +752,22 @@ private static void DestroyDirectory(
 }
 
             if ((attributes & FileAttributes.Directory) != 0)
-            {
-                directories.Add(entry);
-                pending.Push(entry);
-            }
-            else
-            {
-                files.Add(entry);
-            }
+{
+    directories.Add(entry);
+    pending.Push(entry);
+}
+else
+{
+    // Gizli dosyalar ayardan bağımsız olarak varsayılan şekilde korunur.
+    // "Gizli dosyaları sil" açıksa listeye dahil edilir.
+    if ((attributes & FileAttributes.Hidden) != 0 &&
+        !VoidEraseSettings.DeleteHiddenFiles)
+    {
+        continue;
+    }
+
+    files.Add(entry);
+}
         }
     }
 
@@ -695,13 +789,7 @@ private static void DestroyDirectory(
             "System files are skipped for safety:\n" + file));
 }
 
-if ((info.Attributes & FileAttributes.Hidden) != 0)
-{
-    throw new InvalidOperationException(
-        L.T(
-            "Gizli dosyalar güvenlik nedeniyle işlenmiyor:\n" + file,
-            "Hidden files are skipped for safety:\n" + file));
-}
+
 
 if ((info.Attributes & FileAttributes.ReparsePoint) != 0)
 {
@@ -738,6 +826,7 @@ if ((info.Attributes & FileAttributes.ReparsePoint) != 0)
 
     long completedBytes = 0;
     Stopwatch overall = Stopwatch.StartNew();
+	
 
     foreach (string file in files)
     {
@@ -765,15 +854,17 @@ if ((info.Attributes & FileAttributes.ReparsePoint) != 0)
             Math.Max(totalBytes, 1),
             overall.Elapsed);
 
-        DestroyFile(
-            file,
-            new OffsetProgressReporter(
-                form,
-                completedBytes,
-                fileSize,
-                totalBytes));
+       DestroyFile(
+		file,
+		new OffsetProgressReporter(
+			form,
+			completedBytes,
+			fileSize,
+			totalBytes));
 
-        completedBytes += fileSize;
+		verifiedFiles++;
+
+	completedBytes += fileSize;
 
         form.ReportProgress(
             completedBytes,
@@ -869,20 +960,38 @@ if ((info.Attributes & FileAttributes.ReparsePoint) != 0)
             "." + info.Name + "." + Guid.NewGuid().ToString("N") + ".destroying");
 
         byte[] key = CryptoCompat.RandomBytes(32);
-        byte[] headerNonce = CryptoCompat.RandomBytes(12);
+byte[] headerNonce = CryptoCompat.RandomBytes(12);
 
-        try
-        {
-            EncryptChunks(path, temp, key, headerNonce, form);
-            ValidateContainer(temp, key, headerNonce, form);
+try
+{
+    EncryptChunks(path, temp, key, headerNonce, form);
+    ValidateContainer(temp, key, headerNonce, form);
 
-            form.ThrowIfCancellationRequested();
+    form.ThrowIfCancellationRequested();
 
-            form.ReportFinalizing();
+    form.ReportFinalizing();
 
-            File.Delete(path);
-            File.Delete(temp);
-        }
+	form.ThrowIfCancellationRequested();
+File.Delete(temp);
+
+form.ThrowIfCancellationRequested();
+File.Delete(path);
+
+if (File.Exists(path))
+    throw new IOException(
+        L.T(
+            "Kaynak dosya silinemedi.",
+            "The source file could not be deleted."));
+
+VerificationResult verification =
+    SanitizationVerification.VerifyPathAbsent(path);
+
+if (verification.Status != VerificationStatus.Verified)
+    throw new IOException(
+        L.T(
+            "Kaynak dosyanın silindiği doğrulanamadı.",
+            "The source file deletion could not be verified."));
+}
         catch
         {
             try { if (File.Exists(temp)) File.Delete(temp); } catch { }
@@ -1289,9 +1398,15 @@ detail.Text = Path.GetFileName(file);
                 pending.Push(entry);
             }
             else
-            {
-                files.Add(entry);
-            }
+{
+    if ((attributes & FileAttributes.Hidden) != 0 &&
+        !VoidEraseSettings.DeleteHiddenFiles)
+    {
+        continue;
+    }
+
+    files.Add(entry);
+}
         }
     }
 
@@ -1321,9 +1436,9 @@ detail.Text = Path.GetFileName(file);
 			operationFiles.Add(file);
         }
 
-        await Task.Run(
-            () => Program.DestroyPath(file, this),
-            cts.Token);
+        int verifiedCount = await Task.Run(
+			() => Program.DestroyPath(file, this),
+			cts.Token);
 
         cts.Token.ThrowIfCancellationRequested();
 
@@ -1354,21 +1469,32 @@ OperationResult operationResult = new OperationResult
     Successful = totalFiles,
     Failed = 0,
     Skipped = 0,
-    Verified = totalFiles,
-    Cancelled = false
+    Verified = verifiedCount,
+	VerificationCompleted = verifiedCount == totalFiles,
+	KeyDestructionCompleted = verifiedCount == totalFiles,
+	Cancelled = false
 };
 
 operationResult.SuccessfulFiles.AddRange(operationFiles);
 
-        using (OperationSummaryForm summary =
-            new OperationSummaryForm(
-                operationResult,
-                L.English))
-        {
-            summary.ShowDialog(this);
-        }
+if (!isDirectory)
+{
+    HistoryStore.Append(file, totalBytes, "SUCCESS", true);
+}
+else
+{
+    HistoryStore.AppendBatch("SUCCESS", totalFiles, true);
+}
 
-        Close();
+using (OperationSummaryForm summary =
+    new OperationSummaryForm(
+        operationResult,
+        L.English))
+{
+    summary.ShowDialog(this);
+}
+
+Close();
     }
     catch (OperationCanceledException)
     {
@@ -1516,6 +1642,7 @@ internal sealed class MainForm : Form, IProgressReporter
 	private readonly Label hint = new();
     private readonly Button cancelButton = new();
     private readonly Button registryButton = new();
+	private readonly Button historyButton = new();
     private readonly Button languageButton = new();
     private readonly Button updateButton = new();
     private readonly Button settingsButton = new();
@@ -1592,12 +1719,13 @@ internal sealed class MainForm : Form, IProgressReporter
 
         titleLabel.SetBounds(88, 18, 280, 34);
         titleLabel.Text = "VoidErase";
-        titleLabel.Font = new Font("Segoe UI", 20F, FontStyle.Bold);
+        titleLabel.Font = new Font("Segoe UI Semibold", 20F, FontStyle.Bold);
         titleLabel.ForeColor = TextPrimary;
 
         subtitleLabel.SetBounds(90, 51, 340, 22);
         subtitleLabel.Text = L.T("Dosyalarınızı kalıcı olarak silin.", "Permanently erase your files.");
         subtitleLabel.ForeColor = TextSecondary;
+		subtitleLabel.Font = new Font("Segoe UI", 9.5F);
 
         settingsButton.SetBounds(500, 22, 34, 30);
 settingsButton.Text = "⚙";
@@ -1678,16 +1806,16 @@ updateButton.Click += async (_, _) => await CheckForUpdatesAsync(true);
         heading.SetBounds(18, 14, 180, 20);
 
         statusLabel.SetBounds(18, 39, 630, 24);
-        statusLabel.Font = new Font("Segoe UI", 10F, FontStyle.Bold);
+        statusLabel.Font = new Font("Segoe UI Semibold", 10F, FontStyle.Bold);
         statusLabel.ForeColor = TextPrimary;
 
         detailLabel.SetBounds(18, 65, 630, 20);
         detailLabel.ForeColor = TextSecondary;
         detailLabel.AutoEllipsis = true;
 
-        progressTrack.SetBounds(18, 92, 630, 14);
-        progressTrack.BackColor = Color.FromArgb(231, 236, 241);
-        progressFill.SetBounds(0, 0, 0, 14);
+        progressTrack.SetBounds(18, 93, 630, 10);
+		progressTrack.BackColor = Color.FromArgb(231, 236, 241);
+		progressFill.SetBounds(0, 0, 0, 10);
         progressFill.BackColor = Accent;
         progressTrack.Controls.Add(progressFill);
 
@@ -1711,19 +1839,32 @@ updateButton.Click += async (_, _) => await CheckForUpdatesAsync(true);
         cancelButton.FlatAppearance.BorderColor = CardBorder;
         cancelButton.Click += (_, _) => { if (running) cts?.Cancel(); };
 
-        registryButton.SetBounds(24, 414, 322, 34);
-        StyleButton(registryButton, CardColor, TextPrimary, false);
-        registryButton.FlatAppearance.BorderColor = CardBorder;
-        registryButton.Click += (_, _) => ToggleRegistry();
+        registryButton.SetBounds(24, 414, 250, 34);
+StyleButton(registryButton, CardColor, TextPrimary, false);
+registryButton.FlatAppearance.BorderColor = CardBorder;
+registryButton.Click += (_, _) => ToggleRegistry();
 
-        hint.Text = L.T(
-            "Güvenli silme • AES-256-GCM",
-            "Secure erasure • AES-256-GCM");
-        hint.ForeColor = TextSecondary;
-        hint.TextAlign = ContentAlignment.MiddleRight;
-        hint.SetBounds(354, 414, 342, 34);
+historyButton.SetBounds(282, 414, 165, 34);
+historyButton.Text = L.T("İşlem Geçmişi", "History");
+StyleButton(historyButton, CardColor, TextPrimary, false);
+historyButton.FlatAppearance.BorderColor = CardBorder;
+historyButton.Click += (_, _) => OpenHistory();
 
-        Controls.AddRange(new Control[] { destroyButton, cancelButton, registryButton, hint });
+hint.Text = L.T(
+    "Güvenli silme • AES-256-GCM",
+    "Secure erasure • AES-256-GCM");
+hint.ForeColor = TextSecondary;
+hint.TextAlign = ContentAlignment.MiddleRight;
+hint.SetBounds(450, 414, 246, 34);
+
+        Controls.AddRange(new Control[]
+{
+    destroyButton,
+    cancelButton,
+    registryButton,
+    historyButton,
+    hint
+});
     }
 
     private void BuildFooter()
@@ -1857,7 +1998,7 @@ catch
         detailLabel.Text = selectedItems.Count == 1 ? selectedItems[0] : L.T("Birden fazla öğe seçildi.", "Multiple items selected.");
         detailLabel.ForeColor = TextSecondary;
         SetProgress(0);
-        destroyButton.Enabled = count > 0;
+        destroyButton.Enabled = selectedItems.Count > 0;
         destroyButton.ForeColor = destroyButton.Enabled ? Color.White : Color.FromArgb(145, 150, 157);
     }
 
@@ -2086,6 +2227,10 @@ private void formSafeReportProgress(
     }
 
     if (files.Count == 0)
+{
+    bool hasDirectorySelection = selectedItems.Any(Directory.Exists);
+
+    if (!hasDirectorySelection)
     {
         MessageBox.Show(
             this,
@@ -2100,16 +2245,32 @@ private void formSafeReportProgress(
         destroyButton.Enabled = true;
         return;
     }
+}
 
-    var result = new OperationResult
-    {
-        TargetPath = selectedItems.Count == 1
-            ? selectedItems[0]
-            : L.T("Birden fazla öğe", "Multiple items"),
 
-        StartedAt = operationStartedAt,
-        TotalFiles = files.Count
-    };
+var result = new OperationResult
+{
+    TargetPath = selectedItems.Count == 1
+        ? selectedItems[0]
+        : L.T("Birden fazla öğe", "Multiple items"),
+
+    StartedAt = operationStartedAt,
+    TotalFiles = files.Count,
+
+    // Gerçek uygulanan yöntemi raporla.
+    // Cihaz seviyesinde NIST Purge iddiasında bulunma.
+    SanitizationMethod = "Verified cryptographic transformation + deletion",
+    SanitizationStandard = "NIST SP 800-88 Rev. 2 aligned reporting",
+    VerificationMethod = "AES-256-GCM authentication + SHA-256",
+	KeyDestructionCompleted = false,    
+
+    ErasureMethod = "Cryptographic transformation + verified deletion",
+    EncryptionAlgorithm = "AES-256-GCM",
+    VerificationAlgorithm = "SHA-256",
+    
+};
+
+
 
     long totalBytes = 0;
 
@@ -2164,13 +2325,16 @@ private void formSafeReportProgress(
     cts.Token);
 
                 result.Successful++;
-                result.Verified++;
-                result.SuccessfulFiles.Add(file);
+				result.Verified++;
+				result.VerificationCompleted = true;
+				
+				result.SuccessfulFiles.Add(file);
 
                 HistoryStore.Append(
                     file,
                     fileSize,
-                    "SUCCESS");
+                    "SUCCESS",
+					true);
             }
             catch (OperationCanceledException)
             {
@@ -2252,45 +2416,55 @@ private void formSafeReportProgress(
             }
         }
 
-        operationTimer.Stop();
+  operationTimer.Stop();
 
-        result.Elapsed = operationTimer.Elapsed;
-        result.Cancelled = false;
+result.Elapsed = operationTimer.Elapsed;
+result.Cancelled = false;
 
-        SetProgress(100);
+SetProgress(100);
 
-        if (result.Failed == 0 && result.Skipped == 0)
-        {
-            statusLabel.Text = L.T(
-                "Tamamlandı.",
-                "Completed.");
+if (result.Failed == 0 && result.Skipped == 0)
+{
+    progressFill.BackColor = Color.FromArgb(30, 145, 88);
 
-            detailLabel.Text = L.T(
-                $"{result.Successful:N0} dosya başarıyla yok edildi.",
-                $"{result.Successful:N0} files were successfully erased.");
+    statusLabel.Text = L.T(
+        "✓ Silme tamamlandı",
+        "✓ Erasure completed");
 
-            detailLabel.ForeColor = Color.FromArgb(30, 145, 88);
-        }
-        else
-        {
-            statusLabel.Text = L.T(
-                "İşlem tamamlandı.",
-                "Operation completed.");
+    detailLabel.Text = L.T(
+        $"{result.Successful:N0} dosya başarıyla yok edildi • " +
+        $"{FormatSize(result.TotalBytes)} • " +
+        $"{FormatTime(result.Elapsed.TotalSeconds)}",
+        $"{result.Successful:N0} files successfully erased • " +
+        $"{FormatSize(result.TotalBytes)} • " +
+        $"{FormatTime(result.Elapsed.TotalSeconds)}");
 
-            detailLabel.Text = L.T(
-                $"{result.Successful:N0} başarılı • " +
-                $"{result.Failed:N0} başarısız • " +
-                $"{result.Skipped:N0} atlandı.",
-                $"{result.Successful:N0} successful • " +
-                $"{result.Failed:N0} failed • " +
-                $"{result.Skipped:N0} skipped.");
+    detailLabel.ForeColor = Color.FromArgb(30, 145, 88);
+}
+else
+{
+    progressFill.BackColor = Color.FromArgb(190, 130, 35);
 
-            detailLabel.ForeColor = Color.FromArgb(190, 120, 30);
-        }
+    statusLabel.Text = L.T(
+        "İşlem tamamlandı",
+        "Operation completed");
 
-        selectedItems.Clear();
+    detailLabel.Text = L.T(
+        $"{result.Successful:N0} başarılı • " +
+        $"{result.Failed:N0} başarısız • " +
+        $"{result.Skipped:N0} atlandı • " +
+        $"{FormatTime(result.Elapsed.TotalSeconds)}",
+        $"{result.Successful:N0} successful • " +
+        $"{result.Failed:N0} failed • " +
+        $"{result.Skipped:N0} skipped • " +
+        $"{FormatTime(result.Elapsed.TotalSeconds)}");
 
-        ShowOperationSummary(result);
+    detailLabel.ForeColor = Color.FromArgb(190, 130, 35);
+}
+
+selectedItems.Clear();
+
+ShowOperationSummary(result);
     }
     catch (OperationCanceledException)
     {
@@ -2377,6 +2551,7 @@ private void formSafeReportProgress(
     private void UpdateRegistryStatus()
     {
         bool installed = RegistryIsInstalled();
+		historyButton.Text = L.T("İşlem Geçmişi", "History");
         registryButton.Text = installed ? L.T("Sağ Tık Menüsünü KALDIR", "REMOVE CONTEXT MENU") : L.T("Sağ Tık Menüsünü ETKİNLEŞTİR", "ENABLE CONTEXT MENU");
         registryLabel.Text = installed ? L.T("✓ Sağ tık menüsü etkin.", "✓ Context menu enabled.") : L.T("Sağ tık menüsü etkin değil.", "Context menu is not enabled.");
         registryLabel.ForeColor = installed ? Color.FromArgb(30, 145, 88) : TextSecondary;
@@ -2393,6 +2568,14 @@ private void formSafeReportProgress(
         }
     }
 
+private void OpenHistory()
+{
+    if (running)
+        return;
+
+    using HistoryForm history = new();
+    history.ShowDialog(this);
+}
     private void OpenWebsite()
     {
         try { Process.Start(new ProcessStartInfo { FileName = "https://tuncay.net.tr", UseShellExecute = true }); }
@@ -2483,27 +2666,86 @@ private void formSafeReportProgress(
         progressFill.Left = 0;
     }
 
-    public void ReportProgress(long processed, long total, TimeSpan elapsed)
+public void ReportProgress(long processed, long total, TimeSpan elapsed)
+{
+    if (InvokeRequired)
     {
-        if (InvokeRequired) { BeginInvoke(() => ReportProgress(processed, total, elapsed)); return; }
-        int percent = total == 0 ? 100 : (int)CryptoCompat.Clamp(processed * 100L / total, 0, 100);
-        SetProgress(percent);
-        double seconds = Math.Max(elapsed.TotalSeconds, 0.001);
-        double mbps = processed / 1024d / 1024d / seconds;
-        long remaining = Math.Max(0, total - processed);
-        double remainingSeconds = mbps <= 0 ? 0 : remaining / 1024d / 1024d / mbps;
-        statusLabel.Text = L.T($"AES-256-GCM işleniyor... {percent}%", $"Processing AES-256-GCM... {percent}%");
-        detailLabel.Text = L.T($"{FormatSize(processed)} / {FormatSize(total)} • {mbps:0.0} MB/s • Kalan: {FormatTime(remainingSeconds)}", $"{FormatSize(processed)} / {FormatSize(total)} • {mbps:0.0} MB/s • Remaining: {FormatTime(remainingSeconds)}");
+        BeginInvoke(() => ReportProgress(processed, total, elapsed));
+        return;
     }
 
-    public void ReportValidation(long current, long total, TimeSpan elapsed)
+    int percent = total == 0
+        ? 100
+        : (int)CryptoCompat.Clamp(
+            processed * 100L / total,
+            0,
+            100);
+
+    SetProgress(percent);
+
+    double seconds = Math.Max(elapsed.TotalSeconds, 0.001);
+    double mbps = processed / 1024d / 1024d / seconds;
+
+    long remaining = Math.Max(0, total - processed);
+
+    double remainingSeconds =
+        processed > 0
+            ? remaining / (processed / seconds)
+            : 0;
+
+    statusLabel.Text =
+        L.T(
+            $"Siliniyor... {percent}%",
+            $"Erasing... {percent}%");
+
+    detailLabel.Text =
+        L.T(
+            $"{FormatSize(processed)} / {FormatSize(total)}   •   " +
+            $"{mbps:0.0} MB/sn   •   Kalan: {FormatTime(remainingSeconds)}",
+            $"{FormatSize(processed)} / {FormatSize(total)}   •   " +
+            $"{mbps:0.0} MB/s   •   Remaining: {FormatTime(remainingSeconds)}");
+}
+
+  public void ReportValidation(long current, long total, TimeSpan elapsed)
+{
+    if (InvokeRequired)
     {
-        if (InvokeRequired) { BeginInvoke(() => ReportValidation(current, total, elapsed)); return; }
-        int percent = total == 0 ? 100 : (int)CryptoCompat.Clamp(current * 100L / total, 0, 100);
-        SetProgress(percent);
-        statusLabel.Text = L.T($"Şifreli veri doğrulanıyor... {percent}%", $"Verifying encrypted data... {percent}%");
-        detailLabel.Text = L.T($"{current:N0} / {total:N0} parça doğrulandı.", $"{current:N0} / {total:N0} chunks verified.");
+        BeginInvoke(() => ReportValidation(current, total, elapsed));
+        return;
     }
+
+    int percent = total == 0
+        ? 100
+        : (int)CryptoCompat.Clamp(
+            current * 100L / total,
+            0,
+            100);
+
+    SetProgress(percent);
+
+    double seconds = Math.Max(elapsed.TotalSeconds, 0.001);
+    double chunksPerSecond = current / seconds;
+    long remaining = Math.Max(0, total - current);
+
+    double remainingSeconds =
+        current > 0
+            ? remaining / chunksPerSecond
+            : 0;
+
+    statusLabel.Text =
+        L.T(
+            $"Doğrulanıyor... {percent}%",
+            $"Verifying... {percent}%");
+
+    detailLabel.Text =
+        L.T(
+            $"{current:N0} / {total:N0} parça   •   " +
+            $"{chunksPerSecond:0.0} parça/sn   •   " +
+            $"Kalan: {FormatTime(remainingSeconds)}",
+            $"{current:N0} / {total:N0} chunks   •   " +
+            $"{chunksPerSecond:0.0} chunks/s   •   " +
+            $"Remaining: {FormatTime(remainingSeconds)}");
+}
 
     public void ReportFinalizing()
     {
@@ -2555,7 +2797,7 @@ internal sealed class SettingsForm : Form
     public SettingsForm()
     {
         Text = L.T("Ayarlar", "Settings");
-        ClientSize = new Size(520, 500);
+        ClientSize = new Size(520, 560);
         StartPosition = FormStartPosition.CenterParent;
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
@@ -2588,32 +2830,47 @@ internal sealed class SettingsForm : Form
             "Ask for confirmation before erasing");
         confirm.Checked = L.ConfirmBeforeErase;
         confirm.SetBounds(24, 108, 450, 24);
+		
+var hidden = new CheckBox
+{
+    Text = L.T(
+        "Gizli dosyaları sil",
+        "Delete hidden files"),
+    Checked = L.DeleteHiddenFiles,
+    AutoSize = true
+};
 
+hidden.SetBounds(24, 142, 450, 24);
+
+Controls.Add(hidden);
+
+Controls.Add(hidden);
         autoUpdate.Text = L.T(
             "Başlangıçta güncellemeleri kontrol et",
             "Check for updates at startup");
         autoUpdate.Checked = L.AutoUpdate;
-        autoUpdate.SetBounds(24, 140, 450, 24);
+        autoUpdate.SetBounds(24, 172, 450, 24);
 
         protectSystem.Text = L.T(
             "Windows sistem klasörlerini koru",
             "Protect Windows system folders");
         protectSystem.Checked = VoidEraseSettings.ProtectSystemPaths;
-        protectSystem.SetBounds(24, 172, 450, 24);
+        protectSystem.SetBounds(24, 204, 450, 24);
 
         protectSystemDrive.Text = L.T(
             "Sistem sürücüsü kökünü koru (örn. C:\\)",
             "Protect system drive root (e.g. C:\\)");
         protectSystemDrive.Checked = VoidEraseSettings.ProtectSystemDrive;
-        protectSystemDrive.SetBounds(24, 204, 450, 24);
+        protectSystemDrive.SetBounds(24, 236, 450, 24);
 
-        skipReparsePoints.Text = L.T(
-            "Junction / symlink öğelerini atla ve devam et",
-            "Skip junction / symlink items and continue");
-        skipReparsePoints.Checked = VoidEraseSettings.SkipReparsePoints;
-        skipReparsePoints.SetBounds(24, 236, 450, 24);
+skipReparsePoints.Text = L.T(
+    "Junction / symlink öğelerini atla ve devam et",
+    "Skip junction / symlink items and continue");
+skipReparsePoints.Checked = VoidEraseSettings.SkipReparsePoints;
+skipReparsePoints.SetBounds(24, 268, 450, 24);
 
-        Label protectedLabel = new()
+
+Label protectedLabel = new()
         {
             Text = L.T(
                 "Kullanıcı korumalı yolları",
@@ -2621,9 +2878,8 @@ internal sealed class SettingsForm : Form
             Font = new Font("Segoe UI", 9F, FontStyle.Bold),
             ForeColor = Color.FromArgb(55, 69, 82)
         };
-        protectedLabel.SetBounds(24, 272, 300, 22);
-
-        protectedPaths.SetBounds(24, 298, 350, 105);
+        protectedLabel.SetBounds(24, 300, 300, 22);
+        protectedPaths.SetBounds(24, 326, 350, 90);
         protectedPaths.HorizontalScrollbar = true;
         protectedPaths.SelectionMode = SelectionMode.One;
 
@@ -2631,32 +2887,32 @@ internal sealed class SettingsForm : Form
             protectedPaths.Items.Add(path);
 
         addProtectedPath.Text = L.T("Ekle", "Add");
-        addProtectedPath.SetBounds(385, 298, 100, 32);
+        addProtectedPath.SetBounds(385, 326, 100, 32);
         addProtectedPath.Click += (_, _) => AddProtectedPath();
 
         removeProtectedPath.Text = L.T("Kaldır", "Remove");
-        removeProtectedPath.SetBounds(385, 338, 100, 32);
+        removeProtectedPath.SetBounds(385, 366, 100, 32);
         removeProtectedPath.Click += (_, _) => RemoveProtectedPath();
 
         keepLogs.Text = L.T(
             "İşlem günlüklerini tut",
             "Keep operation logs");
         keepLogs.Checked = VoidEraseSettings.KeepLogs;
-        keepLogs.SetBounds(24, 420, 450, 24);
+        keepLogs.SetBounds(24, 450, 450, 24);
 
         Button ok = new()
         {
             Text = "OK",
             DialogResult = DialogResult.OK
         };
-        ok.SetBounds(300, 455, 80, 32);
+        ok.SetBounds(293, 485, 80, 32);
 
         Button cancel = new()
         {
             Text = L.T("İptal", "Cancel"),
             DialogResult = DialogResult.Cancel
         };
-        cancel.SetBounds(390, 455, 95, 32);
+        cancel.SetBounds(383, 485, 95, 32);
 
         AcceptButton = ok;
         CancelButton = cancel;
@@ -2686,7 +2942,12 @@ internal sealed class SettingsForm : Form
                 return;
 
             L.SetLanguage(language.SelectedIndex == 0);
-            L.SaveSettings(confirm.Checked, autoUpdate.Checked);
+
+			VoidEraseSettings.DeleteHiddenFiles = hidden.Checked;
+            L.SaveSettings(
+				confirm.Checked,
+				autoUpdate.Checked,
+				hidden.Checked);
 
             VoidEraseSettings.ProtectSystemPaths =
                 protectSystem.Checked;
@@ -2750,39 +3011,772 @@ internal sealed class SettingsForm : Form
     }
 }
 
+internal sealed class HistoryForm : Form
+{
+    private readonly ListView list = new();
+    private readonly ComboBox filter = new();
+
+    private readonly Label totalValue = new();
+    private readonly Label successValue = new();
+    private readonly Label failedValue = new();
+    private readonly Label skippedValue = new();
+
+    private string[] allHistory = Array.Empty<string>();
+
+    private static readonly Color BackgroundColor =
+        Color.FromArgb(244, 247, 250);
+
+    private static readonly Color CardColor =
+        Color.White;
+
+    private static readonly Color CardBorder =
+        Color.FromArgb(214, 222, 231);
+
+    private static readonly Color TextPrimary =
+        Color.FromArgb(31, 42, 52);
+
+    private static readonly Color TextSecondary =
+        Color.FromArgb(101, 115, 130);
+
+    private static readonly Color Accent =
+        Color.FromArgb(25, 150, 220);
+
+    private static readonly Color Success =
+        Color.FromArgb(30, 145, 88);
+
+    private static readonly Color Failed =
+        Color.FromArgb(211, 63, 63);
+
+    private static readonly Color Skipped =
+        Color.FromArgb(190, 130, 35);
+
+    public HistoryForm()
+    {
+        Text = L.T("İşlem Geçmişi", "Operation History");
+        ClientSize = new Size(760, 530);
+        StartPosition = FormStartPosition.CenterParent;
+        FormBorderStyle = FormBorderStyle.FixedDialog;
+        MaximizeBox = false;
+        MinimizeBox = false;
+        Font = new Font("Segoe UI", 9F);
+        BackColor = BackgroundColor;
+
+        Label title = new()
+        {
+            Text = L.T(
+                "VoidErase İşlem Geçmişi",
+                "VoidErase Operation History"),
+            Font = new Font("Segoe UI", 15F, FontStyle.Bold),
+            ForeColor = TextPrimary
+        };
+        title.SetBounds(24, 18, 470, 30);
+
+        Label subtitle = new()
+        {
+            Text = L.T(
+                "Silme işlemlerinizin geçmişini görüntüleyin.",
+                "View your file erasure history."),
+            ForeColor = TextSecondary
+        };
+        subtitle.SetBounds(25, 47, 470, 20);
+
+        filter.SetBounds(575, 20, 161, 30);
+        filter.DropDownStyle = ComboBoxStyle.DropDownList;
+        filter.BackColor = CardColor;
+        filter.ForeColor = TextPrimary;
+
+        filter.Items.AddRange(new object[]
+        {
+            L.T("Tümü", "All"),
+            L.T("Başarılı", "Successful"),
+            L.T("Başarısız", "Failed"),
+            L.T("Atlandı", "Skipped")
+        });
+
+        filter.SelectedIndex = 0;
+        filter.SelectedIndexChanged += (_, _) => ApplyFilter();
+
+        CreateStatCard(
+            24,
+            L.T("TOPLAM", "TOTAL"),
+            totalValue,
+            TextSecondary);
+
+        CreateStatCard(
+            202,
+            L.T("BAŞARILI", "SUCCESSFUL"),
+            successValue,
+            Success);
+
+        CreateStatCard(
+            380,
+            L.T("BAŞARISIZ", "FAILED"),
+            failedValue,
+            Failed);
+
+        CreateStatCard(
+            558,
+            L.T("ATLANDI", "SKIPPED"),
+            skippedValue,
+            Skipped);
+
+        list.SetBounds(24, 152, 712, 315);
+        list.View = View.Details;
+        list.FullRowSelect = true;
+        list.GridLines = false;
+        list.MultiSelect = false;
+        list.HideSelection = false;
+        list.BorderStyle = BorderStyle.FixedSingle;
+        list.BackColor = CardColor;
+        list.ForeColor = TextPrimary;
+
+        list.Columns.Add(
+            L.T("Tarih", "Date"),
+            125);
+
+        list.Columns.Add(
+            L.T("Durum", "Status"),
+            105);
+
+        list.Columns.Add(
+            L.T("Dosya", "File"),
+            300);
+
+        list.Columns.Add(
+            L.T("Boyut", "Size"),
+            75);
+
+        list.Columns.Add(
+            L.T("Doğrulama", "Verification"),
+            100);
+
+        Button clear = new()
+        {
+            Text = L.T(
+                "Geçmişi Temizle",
+                "Clear History")
+        };
+
+        clear.SetBounds(24, 490, 145, 32);
+        StyleButton(
+            clear,
+            CardColor,
+            TextPrimary,
+            false);
+
+        clear.FlatAppearance.BorderColor = CardBorder;
+        clear.Click += (_, _) => ClearHistory();
+
+        Button close = new()
+        {
+            Text = L.T("Kapat", "Close"),
+            DialogResult = DialogResult.Cancel
+        };
+
+        close.SetBounds(636, 490, 100, 32);
+        StyleButton(
+            close,
+            CardColor,
+            TextPrimary,
+            false);
+
+        close.FlatAppearance.BorderColor = CardBorder;
+
+        CancelButton = close;
+
+        Controls.AddRange(new Control[]
+        {
+            title,
+            subtitle,
+            filter,
+            list,
+            clear,
+            close
+        });
+list.DoubleClick += (_, _) => ShowSelectedDetails();
+        LoadHistory();
+    }
+
+    private void CreateStatCard(
+        int x,
+        string titleText,
+        Label value,
+        Color valueColor)
+    {
+        Panel card = new()
+        {
+            BackColor = CardColor,
+            BorderStyle = BorderStyle.FixedSingle
+        };
+
+        card.SetBounds(x, 78, 160, 58);
+
+        Label title = new()
+        {
+            Text = titleText,
+            Font = new Font(
+                "Segoe UI",
+                7.5F,
+                FontStyle.Bold),
+            ForeColor = TextSecondary
+        };
+
+        title.SetBounds(12, 7, 136, 16);
+
+        value.Text = "0";
+        value.Font = new Font(
+            "Segoe UI",
+            16F,
+            FontStyle.Bold);
+        value.ForeColor = valueColor;
+        value.SetBounds(12, 23, 136, 29);
+
+        card.Controls.Add(title);
+        card.Controls.Add(value);
+
+        Controls.Add(card);
+    }
+
+    private void LoadHistory()
+    {
+        allHistory = HistoryStore.ReadAll();
+
+        UpdateStatistics();
+        ApplyFilter();
+    }
+
+    private void UpdateStatistics()
+    {
+        int total = 0;
+        int success = 0;
+        int failed = 0;
+        int skipped = 0;
+
+        foreach (string line in allHistory)
+        {
+            string[] parts = line.Split('|');
+
+            if (parts.Length < 5)
+                continue;
+
+            total++;
+
+            if (parts[1].Equals(
+                    "SUCCESS",
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                success++;
+            }
+            else if (parts[1].Equals(
+                         "FAILED",
+                         StringComparison.OrdinalIgnoreCase))
+            {
+                failed++;
+            }
+            else if (parts[1].Equals(
+                         "SKIPPED",
+                         StringComparison.OrdinalIgnoreCase))
+            {
+                skipped++;
+            }
+        }
+
+        totalValue.Text = total.ToString();
+        successValue.Text = success.ToString();
+        failedValue.Text = failed.ToString();
+        skippedValue.Text = skipped.ToString();
+    }
+
+    private void ApplyFilter()
+    {
+        list.Items.Clear();
+
+        int selectedFilter = filter.SelectedIndex;
+
+        foreach (string line in allHistory.Reverse())
+        {
+            string[] parts = line.Split('|');
+
+            if (parts.Length < 5)
+                continue;
+
+            string status = parts[1];
+
+            bool include =
+                selectedFilter == 0 ||
+                (selectedFilter == 1 &&
+                 status.Equals(
+                     "SUCCESS",
+                     StringComparison.OrdinalIgnoreCase)) ||
+                (selectedFilter == 2 &&
+                 status.Equals(
+                     "FAILED",
+                     StringComparison.OrdinalIgnoreCase)) ||
+                (selectedFilter == 3 &&
+                 status.Equals(
+                     "SKIPPED",
+                     StringComparison.OrdinalIgnoreCase));
+
+            if (!include)
+                continue;
+
+            ListViewItem item = new(parts[0]);
+
+            string displayStatus =
+                status.Equals(
+                    "SUCCESS",
+                    StringComparison.OrdinalIgnoreCase)
+                    ? L.T("BAŞARILI", "SUCCESS")
+                    : status.Equals(
+                        "FAILED",
+                        StringComparison.OrdinalIgnoreCase)
+                        ? L.T("BAŞARISIZ", "FAILED")
+                        : status.Equals(
+                            "SKIPPED",
+                            StringComparison.OrdinalIgnoreCase)
+                            ? L.T("ATLANDI", "SKIPPED")
+                            : status;
+
+            string verification =
+                parts[4].Equals(
+                    "VERIFIED",
+                    StringComparison.OrdinalIgnoreCase)
+                    ? L.T("DOĞRULANDI", "VERIFIED")
+                    : L.T(
+                        "DOĞRULANMADI",
+                        "NOT VERIFIED");
+
+            item.SubItems.Add(displayStatus);
+            item.SubItems.Add(parts[2]);
+            item.SubItems.Add(FormatSize(parts[3]));
+            item.SubItems.Add(verification);
+
+            if (status.Equals(
+                    "SUCCESS",
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                item.ForeColor = Success;
+            }
+            else if (status.Equals(
+                         "FAILED",
+                         StringComparison.OrdinalIgnoreCase))
+            {
+                item.ForeColor = Failed;
+            }
+            else if (status.Equals(
+                         "SKIPPED",
+                         StringComparison.OrdinalIgnoreCase))
+            {
+                item.ForeColor = Skipped;
+            }
+
+            list.Items.Add(item);
+        }
+    }
+
+    private static string FormatSize(string value)
+    {
+        if (!long.TryParse(value, out long bytes))
+            return value;
+
+        if (bytes < 1024)
+            return $"{bytes} B";
+
+        if (bytes < 1024 * 1024)
+            return $"{bytes / 1024.0:F1} KB";
+
+        if (bytes < 1024L * 1024 * 1024)
+            return $"{bytes / (1024.0 * 1024):F1} MB";
+
+        return $"{bytes / (1024.0 * 1024 * 1024):F1} GB";
+    }
+
+private void ShowSelectedDetails()
+{
+    if (list.SelectedItems.Count == 0)
+        return;
+
+    ListViewItem item = list.SelectedItems[0];
+
+    if (item.SubItems.Count < 5)
+        return;
+
+    string date = item.SubItems[0].Text;
+    string status = item.SubItems[1].Text;
+    string file = item.SubItems[2].Text;
+    string size = item.SubItems[3].Text;
+    string verification = item.SubItems[4].Text;
+
+    string fullPath = "Tam dosya yolu bu kayıt için saklanmamış.";
+
+    int index = list.SelectedItems[0].Index;
+
+    IEnumerable<string> records = allHistory.Reverse();
+
+    string[] matchingRecords = records
+        .Where(line =>
+        {
+            string[] parts = line.Split('|');
+
+            return parts.Length >= 5 &&
+                   parts[0] == date &&
+                   parts[2] == file;
+        })
+        .ToArray();
+
+    if (matchingRecords.Length > 0)
+    {
+        string[] parts = matchingRecords[0].Split('|');
+
+        if (parts.Length >= 6 &&
+            !string.IsNullOrWhiteSpace(parts[5]))
+        {
+            fullPath = parts[5];
+        }
+    }
+
+    using OperationDetailForm dlg = new(
+        date,
+        status,
+        file,
+        size,
+        verification,
+        fullPath);
+
+    dlg.ShowDialog(this);
+}
+
+    private void ClearHistory()
+    {
+        DialogResult answer = MessageBox.Show(
+            this,
+            L.T(
+                "Tüm işlem geçmişi silinsin mi?",
+                "Delete all operation history?"),
+            L.T(
+                "Geçmişi Temizle",
+                "Clear History"),
+            MessageBoxButtons.YesNo,
+            MessageBoxIcon.Warning);
+
+        if (answer != DialogResult.Yes)
+            return;
+
+        string historyPath = Path.Combine(
+            Environment.GetFolderPath(
+                Environment.SpecialFolder.LocalApplicationData),
+            "VoidErase",
+            "history.log");
+
+        try
+        {
+            if (File.Exists(historyPath))
+                File.Delete(historyPath);
+
+            allHistory = Array.Empty<string>();
+
+            UpdateStatistics();
+            ApplyFilter();
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(
+                this,
+                ex.Message,
+                L.T("Hata", "Error"),
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Error);
+        }
+    }
+
+    private static void StyleButton(
+        Button button,
+        Color backColor,
+        Color foreColor,
+        bool accent)
+    {
+        button.FlatStyle = FlatStyle.Flat;
+        button.FlatAppearance.BorderSize = 1;
+        button.FlatAppearance.BorderColor =
+            accent
+                ? backColor
+                : CardBorder;
+
+        button.FlatAppearance.MouseOverBackColor =
+            Color.FromArgb(242, 245, 248);
+
+        button.FlatAppearance.MouseDownBackColor =
+            Color.FromArgb(238, 242, 246);
+
+        button.BackColor = backColor;
+        button.ForeColor = foreColor;
+        button.UseVisualStyleBackColor = false;
+        button.Cursor = Cursors.Hand;
+    }
+}
+internal sealed class OperationDetailForm : Form
+{
+    public OperationDetailForm(
+        string date,
+        string status,
+        string file,
+        string size,
+        string verification,
+        string fullPath)
+    {
+        Text = L.T(
+            "İşlem Detayı",
+            "Operation Details");
+
+        ClientSize = new Size(560, 365);
+        StartPosition = FormStartPosition.CenterParent;
+        FormBorderStyle = FormBorderStyle.FixedDialog;
+        MaximizeBox = false;
+        MinimizeBox = false;
+        Font = new Font("Segoe UI", 9F);
+        BackColor = Color.FromArgb(244, 247, 250);
+
+        Label title = new()
+        {
+            Text = L.T(
+                "VoidErase İşlem Detayı",
+                "VoidErase Operation Details"),
+            Font = new Font(
+                "Segoe UI",
+                14F,
+                FontStyle.Bold),
+            ForeColor = Color.FromArgb(31, 42, 52)
+        };
+        title.SetBounds(24, 20, 500, 30);
+
+        Panel card = new()
+        {
+            BackColor = Color.White,
+            BorderStyle = BorderStyle.FixedSingle
+        };
+        card.SetBounds(24, 65, 512, 220);
+
+        AddRow(
+            card,
+            L.T("Tarih", "Date"),
+            date,
+            15,
+            15);
+
+        AddRow(
+            card,
+            L.T("Durum", "Status"),
+            status,
+            15,
+            55);
+
+        AddRow(
+            card,
+            L.T("Dosya", "File"),
+            file,
+            15,
+            95);
+
+        AddRow(
+            card,
+            L.T("Boyut", "Size"),
+            size,
+            15,
+            135);
+
+        AddRow(
+            card,
+            L.T("Doğrulama", "Verification"),
+            verification,
+            15,
+            175);
+
+        Label pathTitle = new()
+        {
+            Text = L.T(
+                "Tam Dosya Yolu",
+                "Full File Path"),
+            Font = new Font(
+                "Segoe UI",
+                8.5F,
+                FontStyle.Bold),
+            ForeColor = Color.FromArgb(101, 115, 130)
+        };
+        pathTitle.SetBounds(24, 300, 120, 20);
+
+        TextBox pathBox = new()
+        {
+            Text = fullPath,
+            ReadOnly = true,
+            BorderStyle = BorderStyle.FixedSingle,
+            BackColor = Color.White,
+            ForeColor = Color.FromArgb(31, 42, 52),
+            AutoSize = false
+        };
+        pathBox.SetBounds(145, 296, 391, 28);
+
+        Button close = new()
+        {
+            Text = L.T("Kapat", "Close"),
+            DialogResult = DialogResult.Cancel
+        };
+
+        close.SetBounds(436, 330, 100, 30);
+
+        close.FlatStyle = FlatStyle.Flat;
+        close.FlatAppearance.BorderSize = 1;
+        close.FlatAppearance.BorderColor =
+            Color.FromArgb(214, 222, 231);
+
+        close.BackColor = Color.White;
+        close.ForeColor =
+            Color.FromArgb(31, 42, 52);
+
+        close.UseVisualStyleBackColor = false;
+        close.Cursor = Cursors.Hand;
+
+        CancelButton = close;
+
+        Controls.AddRange(new Control[]
+        {
+            title,
+            card,
+            pathTitle,
+            pathBox,
+            close
+        });
+    }
+
+    private static void AddRow(
+        Panel panel,
+        string caption,
+        string value,
+        int x,
+        int y)
+    {
+        Label captionLabel = new()
+        {
+            Text = caption,
+            Font = new Font(
+                "Segoe UI",
+                8.5F,
+                FontStyle.Bold),
+            ForeColor =
+                Color.FromArgb(101, 115, 130)
+        };
+
+        captionLabel.SetBounds(
+            x,
+            y,
+            110,
+            24);
+
+        Label valueLabel = new()
+        {
+            Text = value,
+            Font = new Font(
+                "Segoe UI",
+                9F,
+                FontStyle.Bold),
+            ForeColor =
+                Color.FromArgb(31, 42, 52),
+            AutoEllipsis = true
+        };
+
+        valueLabel.SetBounds(
+            x + 125,
+            y,
+            350,
+            24);
+
+        panel.Controls.Add(captionLabel);
+        panel.Controls.Add(valueLabel);
+    }
+}
 internal static class HistoryStore
 {
     private static readonly object Sync = new();
-    private static string FilePath => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "VoidErase", "history.log");
 
-    public static void Append(string path, long size, string status)
+    private static string FilePath =>
+        Path.Combine(
+            Environment.GetFolderPath(
+                Environment.SpecialFolder.LocalApplicationData),
+            "VoidErase",
+            "history.log");
+
+    public static void Append(
+        string path,
+        long size,
+        string status,
+        bool verified = false)
     {
         try
         {
             lock (Sync)
             {
-                Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
+                Directory.CreateDirectory(
+                    Path.GetDirectoryName(FilePath)!);
+
                 string name = Path.GetFileName(path);
-                File.AppendAllText(FilePath, $"{DateTime.Now:yyyy-MM-dd HH:mm:ss}|{status}|{name}|{size}\n");
+
+string verification =
+    verified ? "VERIFIED" : "NOT_VERIFIED";
+
+File.AppendAllText(
+    FilePath,
+    $"{DateTime.Now:yyyy-MM-dd HH:mm:ss}|{status}|{name}|{size}|{verification}|{path}\n");
             }
         }
-        catch { }
+        catch
+        {
+            // History logging must never interrupt deletion.
+        }
     }
 
-    public static void AppendBatch(string status, int count)
+    public static void AppendBatch(
+        string status,
+        int count,
+        bool verified = false)
     {
         try
         {
             lock (Sync)
             {
-                Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
-                File.AppendAllText(FilePath, $"{DateTime.Now:yyyy-MM-dd HH:mm:ss}|{status}|{count} files|0\n");
+                Directory.CreateDirectory(
+                    Path.GetDirectoryName(FilePath)!);
+
+                string verification =
+                    verified ? "VERIFIED" : "NOT_VERIFIED";
+
+                File.AppendAllText(
+                    FilePath,
+                    $"{DateTime.Now:yyyy-MM-dd HH:mm:ss}|{status}|{count} files|0|{verification}\n");
             }
         }
-        catch { }
+        catch
+        {
+            // History logging must never interrupt deletion.
+        }
+    }
+
+    public static string[] ReadAll()
+    {
+        try
+        {
+            lock (Sync)
+            {
+                if (!File.Exists(FilePath))
+                    return Array.Empty<string>();
+
+                return File.ReadAllLines(FilePath);
+            }
+        }
+        catch
+        {
+            return Array.Empty<string>();
+        }
     }
 }
-
 internal static class ShellRefresh
 {
     [DllImport("shell32.dll")]
@@ -2798,5 +3792,13 @@ internal static class ShellRefresh
             IntPtr.Zero);
     }
 }
+
+
+
+
+
+
+
+
 
 
