@@ -3,7 +3,7 @@
 Secure Windows file/folder destruction utility.
 
 ## Version
-Current release: **[Latest Release](https://github.com/tuncaycandan/VoidErase/releases/latest)**
+Current release: **v1.2.1**
 
 ## Features
 - AES-256-GCM processing with SHA-256 verification
@@ -25,6 +25,19 @@ Current release: **[Latest Release](https://github.com/tuncaycandan/VoidErase/re
 
 ## ScreenShot
 ![VoidErase Main Window](ss.PNG)
+
+## Build
+
+VoidErase targets **.NET Framework 4.8** and is built for **x64 Windows**. Open `VoidErase.Framework48.slnx` or `VoidErase.Framework48.csproj` in Visual Studio with the .NET Framework 4.8 Developer Pack installed. Alternatively, run the PowerShell build script from a Windows PowerShell session:
+
+```powershell
+Set-ExecutionPolicy -Scope Process Bypass
+.\Build-Framework48.ps1
+```
+
+The script uses MSBuild when available and falls back to the `dotnet` CLI. It verifies that `bin\\Release\\VoidErase.exe` was produced. The sandbox used for source inspection does not contain the Windows .NET Framework targeting pack, so the final Release build must be verified on Windows.
+
+Historical source copies and patch notes are kept under `archive/` and are not part of the active build.
 
 ## GitHub updater
 Repository: https://github.com/tuncaycandan/VoidErase

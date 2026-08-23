@@ -167,7 +167,13 @@ internal static class Program
         bool install = false;
         bool uninstall = false;
 		bool mediaInfo = false;
-		string? mediaInfoPath = null;
+        bool devicePurgePreflight = false;
+        bool devicePurgeCapabilityTest = false;
+		bool hddPreflight = false;
+		
+		bool hddExecutionDryRun = false;
+        string? mediaInfoPath = null;
+        int? mediaInfoDiskNumber = null;
 
         for (int i = 0; i < args.Length; i++)
         {
@@ -178,60 +184,525 @@ internal static class Program
                 case "--destroy":
                     if (i + 1 < args.Length) file = args[++i].Trim('"');
                     break;
+                case "--media-test":
+                case "--media-info":
+                    mediaInfo = true;
+                    if (i + 1 < args.Length &&
+                        !args[i + 1].StartsWith("--", StringComparison.Ordinal))
+                    {
+                        mediaInfoPath = args[++i].Trim('"');
+                    }
+                    break;
+
+                case "--media-test-disk":
+                case "--media-info-disk":
+                    mediaInfo = true;
+                    if (i + 1 >= args.Length ||
+                        !int.TryParse(args[++i], out int requestedDiskNumber) ||
+                        requestedDiskNumber < 0)
+                    {
+                        throw new ArgumentException(
+                            "--media-test-disk requires a non-negative physical disk number.");
+                    }
+                    mediaInfoDiskNumber = requestedDiskNumber;
+                    break;
+
+                case "--device-purge-test-disk":
+                case "--device-purge-preflight-disk":
+                    mediaInfo = true;
+                    devicePurgePreflight = true;
+                    if (i + 1 >= args.Length ||
+                        !int.TryParse(args[++i], out int preflightDiskNumber) ||
+                        preflightDiskNumber < 0)
+                    {
+                        throw new ArgumentException(
+                            "--device-purge-test-disk requires a non-negative physical disk number.");
+                    }
+                    mediaInfoDiskNumber = preflightDiskNumber;
+                    break;
+
+                case "--device-purge-capability-test-disk":
+                case "--nvme-capability-test-disk":
+                    mediaInfo = true;
+                    devicePurgeCapabilityTest = true;
+                    if (i + 1 >= args.Length ||
+                        !int.TryParse(args[++i], out int capabilityDiskNumber) ||
+                        capabilityDiskNumber < 0)
+                    {
+                        throw new ArgumentException(
+                            "--device-purge-capability-test-disk requires a non-negative physical disk number.");
+                    }
+                    mediaInfoDiskNumber = capabilityDiskNumber;
+                    break;
+case "--usb-preflight":
+    if (i + 1 < args.Length &&
+        !args[i + 1].StartsWith("--", StringComparison.Ordinal))
+    {
+        mediaInfoPath = args[++i].Trim('"');
+    }
+    else
+    {
+        throw new ArgumentException(
+            "--usb-preflight requires a drive path such as E:\\");
+    }
+    break;
+
+case "--hdd-preflight":
+    hddPreflight = true;
+
+    if (i + 1 < args.Length &&
+        !args[i + 1].StartsWith("--", StringComparison.Ordinal))
+    {
+        mediaInfoPath = args[++i].Trim('"');
+    }
+    else
+    {
+        throw new ArgumentException(
+            "--hdd-preflight requires a drive path such as D:\\");
+    }
+                    break;
+
+                case "--hdd-execution-dryrun":
+                    hddExecutionDryRun = true;
+
+                    if (i + 1 < args.Length &&
+                        !args[i + 1].StartsWith("--", StringComparison.Ordinal))
+                    {
+                        mediaInfoPath = args[++i].Trim('"');
+                    }
+                    else
+                    {
+                        throw new ArgumentException(
+                            "--hdd-execution-dryrun requires a drive path such as D:\\");
+                    }
+                    break;
+
                 default:
                     if (!args[i].StartsWith("--", StringComparison.Ordinal))
                         file ??= args[i].Trim('"');
                     break;
-					case "--media-info":
-						mediaInfo = true;
-						if (i + 1 < args.Length)
-						mediaInfoPath = args[++i].Trim('"');
-					break;
             }
         }
 
         try
         {
-			if (mediaInfo)
+			if (hddPreflight)
 {
-    if (string.IsNullOrWhiteSpace(mediaInfoPath))
+    try
     {
-        Console.WriteLine("Usage: VoidErase.exe --media-info <path>");
-        return;
+        string target = Path.GetFullPath(mediaInfoPath);
+
+        SanitizationPlan plan =
+            StorageSanitizationProtocol.AnalyzePath(target);
+
+        if (string.IsNullOrWhiteSpace(plan.DiskNumber))
+        {
+            MessageBox.Show(
+                "HDD preflight BLOCKED.\r\n\r\n" +
+                "Target could not be mapped to a physical disk.\r\n" +
+                "No write operation was performed.",
+                "VoidErase HDD Preflight",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
+
+            return;
+        }
+
+        int diskNumber;
+
+        if (!int.TryParse(plan.DiskNumber, out diskNumber))
+        {
+            MessageBox.Show(
+                "HDD preflight BLOCKED.\r\n\r\n" +
+                "Invalid physical disk number: " +
+                plan.DiskNumber +
+                "\r\n\r\nNo write operation was performed.",
+                "VoidErase HDD Preflight",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
+
+            return;
+        }
+
+        HddLogicalClearPreflightResult preflight =
+            HddLogicalClearPreflight.AnalyzeDisk(diskNumber);
+
+        string status =
+            preflight.State == HddPreflightState.Pass
+                ? "PASS"
+                : preflight.State == HddPreflightState.Blocked
+                    ? "BLOCKED"
+                    : "ERROR";
+
+        string message =
+            "=== VoidErase HDD LogicalClear Preflight ===\r\n\r\n" +
+            "Target: " + target + "\r\n" +
+            "Physical disk: " + preflight.PhysicalDrive + "\r\n" +
+            "Disk number: " + preflight.DiskNumber + "\r\n" +
+            "Model: " + (preflight.Model ?? "(unknown)") + "\r\n" +
+            "Serial: " + (preflight.SerialNumber ?? "(unknown)") + "\r\n" +
+            "Bus: " + (preflight.BusType ?? "(unknown)") + "\r\n" +
+            "Media: " + (preflight.MediaType ?? "(unknown)") + "\r\n" +
+            "Disk size: " +
+                preflight.DiskSizeBytes.ToString("N0") +
+                " bytes\r\n" +
+            "Logical sector: " +
+                preflight.LogicalSectorSize +
+                "\r\n" +
+            "Physical sector: " +
+                preflight.PhysicalSectorSize +
+                "\r\n" +
+            "System disk: " +
+                (preflight.IsSystem ? "Yes" : "No") +
+                "\r\n" +
+            "Boot disk: " +
+                (preflight.IsBoot ? "Yes" : "No") +
+                "\r\n" +
+            "Offline: " +
+                (preflight.IsOffline ? "Yes" : "No") +
+                "\r\n" +
+            "Read-only: " +
+                (preflight.IsReadOnly ? "Yes" : "No") +
+                "\r\n\r\n" +
+            "=== Safety Gate ===\r\n\r\n" +
+            "Result: " + status + "\r\n\r\n" +
+            "Scope:\r\n" +
+            preflight.Scope +
+            "\r\n\r\n" +
+            "Reason:\r\n" +
+            preflight.Reason +
+            "\r\n\r\n" +
+            "DRY RUN ONLY — no erase, overwrite, sanitize, format, " +
+            "TRIM, IOCTL or device command was executed.";
+
+        MessageBox.Show(
+            message,
+            "VoidErase HDD Preflight",
+            MessageBoxButtons.OK,
+            preflight.State == HddPreflightState.Pass
+                ? MessageBoxIcon.Information
+                : MessageBoxIcon.Warning);
+    }
+    catch (Exception ex)
+    {
+        MessageBox.Show(
+            "HDD preflight failed:\r\n\r\n" + ex,
+            "VoidErase HDD Preflight",
+            MessageBoxButtons.OK,
+            MessageBoxIcon.Error);
     }
 
-    MediaInfo media = MediaDetection.Detect(mediaInfoPath);
-SanitizationDecision decision = NistSanitization.Decide(media);
-
-string result =
-    "=== VoidErase Media / NIST Test ===\n\n" +
-    "Path: " + mediaInfoPath + "\n" +
-    "Drive: " + media.DriveLetter + "\n" +
-    "Kind: " + media.Kind + "\n" +
-    "Model: " + media.Model + "\n" +
-    "Bus: " + media.BusType + "\n" +
-    "Media type: " + media.MediaType + "\n" +
-    "System drive: " + media.IsSystemDrive + "\n" +
-    "Removable: " + media.IsRemovable + "\n" +
-    "Solid state: " + media.IsSolidState + "\n" +
-    "Virtual: " + media.IsVirtual + "\n\n" +
-    "=== Sanitization Decision ===\n\n" +
-    "Method: " + decision.Method + "\n" +
-	"Assurance: " + decision.Assurance + "\n" +
-	"Requires device command: " + decision.RequiresDeviceCommand + "\n" +
-	"Verification required: " + decision.VerificationRequired + "\n" +
-	"NIST aligned claim allowed: " + decision.NistAlignedClaimAllowed + "\n\n" +
-	"Reason:\n" + decision.Reason + "\n\n" +
-	"Recommendation:\n" + decision.Recommendation;
-
-MessageBox.Show(
-    result,
-    "VoidErase Media / NIST Test",
-    MessageBoxButtons.OK,
-    MessageBoxIcon.Information);
-
-return;
+    return;
 }
+            if (hddExecutionDryRun)
+            {
+                try
+                {
+                    string target = Path.GetFullPath(mediaInfoPath ?? "");
+
+                    SanitizationPlan plan =
+                        StorageSanitizationProtocol.AnalyzePath(target);
+
+                    if (string.IsNullOrWhiteSpace(plan.DiskNumber))
+                    {
+                        MessageBox.Show(
+                            "HDD execution DRY-RUN BLOCKED.\r\n\r\n" +
+                            "Target could not be mapped to a physical disk.\r\n" +
+                            "No write operation was performed.",
+                            "VoidErase HDD Execution Gate",
+                            MessageBoxButtons.OK,
+                            MessageBoxIcon.Warning);
+                        return;
+                    }
+
+                    int diskNumber;
+                    if (!int.TryParse(plan.DiskNumber, out diskNumber))
+                    {
+                        MessageBox.Show(
+                            "HDD execution DRY-RUN BLOCKED.\r\n\r\n" +
+                            "Invalid physical disk number: " + plan.DiskNumber +
+                            "\r\n\r\nNo write operation was performed.",
+                            "VoidErase HDD Execution Gate",
+                            MessageBoxButtons.OK,
+                            MessageBoxIcon.Warning);
+                        return;
+                    }
+
+                    HddLogicalClearPreflightResult preflight =
+                        HddLogicalClearPreflight.AnalyzeDisk(diskNumber);
+
+                    if (preflight.State != HddPreflightState.Pass)
+                    {
+                        MessageBox.Show(
+                            "HDD execution DRY-RUN BLOCKED.\r\n\r\n" +
+                            "Preflight: " + preflight.State + "\r\n" +
+                            "Reason: " + preflight.Reason +
+                            "\r\n\r\nNo write operation was performed.",
+                            "VoidErase HDD Execution Gate",
+                            MessageBoxButtons.OK,
+                            MessageBoxIcon.Warning);
+                        return;
+                    }
+
+                    HddLogicalClearExecutionPlan executionPlan =
+                        HddLogicalClearExecution.Prepare(
+                            target,
+                            diskNumber,
+                            preflight.Model,
+                            preflight.SerialNumber,
+                            preflight.DiskSizeBytes);
+
+                    string executionStatus =
+                        executionPlan.State.ToString().ToUpperInvariant();
+
+                    string gateStatus =
+                        executionPlan.Gate == null
+                            ? "UNKNOWN"
+                            : executionPlan.Gate.State.ToString().ToUpperInvariant();
+
+                    string executionMessage =
+                        "=== VoidErase HDD LogicalClear Execution Gate ===\r\n\r\n" +
+                        "Target: " + target + "\r\n" +
+                        "Physical disk: " +
+                            (executionPlan.Gate?.PhysicalDrive ?? preflight.PhysicalDrive) +
+                            "\r\n" +
+                        "Disk number: " +
+                            (executionPlan.Gate?.DiskNumber.ToString() ?? diskNumber.ToString()) +
+                            "\r\n" +
+                        "Model: " +
+                            (executionPlan.Gate?.Model ?? preflight.Model ?? "(unknown)") +
+                            "\r\n" +
+                        "Serial: " +
+                            (executionPlan.Gate?.SerialNumber ?? preflight.SerialNumber ?? "(unknown)") +
+                            "\r\n" +
+                        "Media: " +
+                            (executionPlan.Gate?.MediaType ?? preflight.MediaType ?? "(unknown)") +
+                            "\r\n" +
+                        "System disk: " +
+                            ((executionPlan.Gate?.IsSystem ?? preflight.IsSystem) ? "Yes" : "No") +
+                            "\r\n" +
+                        "Boot disk: " +
+                            ((executionPlan.Gate?.IsBoot ?? preflight.IsBoot) ? "Yes" : "No") +
+                            "\r\n" +
+                        "Offline: " +
+                            ((executionPlan.Gate?.IsOffline ?? preflight.IsOffline) ? "Yes" : "No") +
+                            "\r\n" +
+                        "Read-only: " +
+                            ((executionPlan.Gate?.IsReadOnly ?? preflight.IsReadOnly) ? "Yes" : "No") +
+                            "\r\n\r\n" +
+                        "Preflight: PASS\r\n" +
+                        "Final execution gate: " + gateStatus + "\r\n" +
+                        "Execution plan: " + executionStatus + "\r\n" +
+                        "Logical sector: " + executionPlan.LogicalSectorSize + " bytes\r\n" +
+                        "Physical sector: " + executionPlan.PhysicalSectorSize + " bytes\r\n" +
+                        "Addressable bytes: " + executionPlan.AddressableBytes.ToString("N0") + "\r\n" +
+                        "Sector-aligned bytes: " + executionPlan.AlignedWriteBytes.ToString("N0") + "\r\n" +
+                        "Planning block: " + executionPlan.BlockSizeBytes.ToString("N0") + " bytes\r\n" +
+                        "Planned blocks: " + executionPlan.BlockCount.ToString("N0") + "\r\n" +
+                        "Execution mode: " + (executionPlan.ExecutionMode ?? "(unknown)") + "\r\n" +
+                        "Verification plan: " + (executionPlan.VerificationPlan ?? "(unknown)") + "\r\n\r\n" +
+                        "Message:\r\n" +
+                        executionPlan.Message +
+                        "\r\n\r\n" +
+                        "DRY RUN ONLY — no erase, overwrite, sanitize, format, " +
+                        "TRIM, IOCTL or device command was executed.";
+
+                    MessageBox.Show(
+                        executionMessage,
+                        "VoidErase HDD Execution Gate",
+                        MessageBoxButtons.OK,
+                        executionPlan.State == HddLogicalClearExecutionState.Ready
+                            ? MessageBoxIcon.Information
+                            : MessageBoxIcon.Warning);
+
+                    return;
+                }
+                catch (Exception ex)
+                {
+                    MessageBox.Show(
+                        "HDD execution DRY-RUN failed:\r\n\r\n" + ex,
+                        "VoidErase HDD Execution Gate",
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Error);
+                }
+
+                return;
+            }
+
+            if (mediaInfo)
+            {
+                SanitizationPlan plan;
+                string target;
+
+                if (mediaInfoDiskNumber.HasValue)
+                {
+                    plan = StorageSanitizationProtocol.AnalyzePhysicalDiskNumber(
+                        mediaInfoDiskNumber.Value);
+                    target = plan.PhysicalDrive;
+                }
+                else
+                {
+                    target = string.IsNullOrWhiteSpace(mediaInfoPath)
+                        ? Path.GetPathRoot(Environment.SystemDirectory) ?? Environment.SystemDirectory
+                        : Path.GetFullPath(mediaInfoPath);
+
+                    plan = StorageSanitizationProtocol.AnalyzePath(target);
+                }
+
+                if (devicePurgeCapabilityTest)
+                {
+                    NvmeSanitizeCapabilityResult capability;
+
+                    if (plan.MediaKind != StorageMediaKind.Nvme)
+                    {
+                        capability = new NvmeSanitizeCapabilityResult
+                        {
+                            Status = NvmeSanitizeCapabilityStatus.NotApplicable,
+                            PreferredMethod = "Not applicable — target is not classified as NVMe",
+                            Detail = "The capability probe is intentionally limited to NVMe media."
+                        };
+                    }
+                    else if (plan.IsSystemDisk)
+                    {
+                        capability = new NvmeSanitizeCapabilityResult
+                        {
+                            Status = NvmeSanitizeCapabilityStatus.Unknown,
+                            PreferredMethod = "BLOCKED — running Windows disk",
+                            Detail = "Capability probing is blocked for the running Windows system disk. No device command was issued."
+                        };
+                    }
+                    else
+                    {
+                        capability = NvmeCapabilityProbe.Probe(plan.PhysicalDrive);
+                    }
+
+                    string capabilityStatus = capability.Status.ToString().ToUpperInvariant();
+
+                    string capabilityResult =
+                        "=== VoidErase NVMe Sanitize Capability Probe (READ-ONLY) ===\n\n" +
+                        "Physical disk: " + (plan.PhysicalDrive ?? "(unknown)") + "\n" +
+                        "Disk number: " + (plan.DiskNumber ?? "(unknown)") + "\n" +
+                        "Model: " + (plan.Model ?? "(unknown)") + "\n" +
+                        "Media: " + plan.MediaKind + "\n" +
+                        "Bus: " + (plan.BusType ?? "(unknown)") + "\n" +
+                        "System disk: " + (plan.IsSystemDisk ? "Yes" : "No") + "\n\n" +
+                        "=== Capability ===\n\n" +
+                        "Status: " + capabilityStatus + "\n" +
+                        "Preferred method: " + capability.PreferredMethod + "\n" +
+                        "Crypto Erase: " + (capability.CryptoErase ? "Yes" : "No") + "\n" +
+                        "Block Erase: " + (capability.BlockErase ? "Yes" : "No") + "\n" +
+                        "Overwrite: " + (capability.Overwrite ? "Yes" : "No") + "\n" +
+                        "SANICAP: 0x" + capability.SanitizeCapabilitiesRaw.ToString("X8") + "\n" +
+                        "NDI: " + (capability.NoDeallocateInhibited ? "Yes" : "No") + "\n" +
+                        "NODMMAS modifies media: " + (capability.NoDeallocateAfterSanitizeModifiesMedia ? "Yes" : "No") + "\n\n" +
+                        "Detail: " + capability.Detail + "\n\n" +
+                        "Execution: BLOCKED — capability probe only. No sanitize, erase, format, or write command is executed.";
+
+                    MessageBox.Show(
+                        capabilityResult,
+                        "VoidErase NVMe Capability Probe",
+                        MessageBoxButtons.OK,
+                        capability.Status == NvmeSanitizeCapabilityStatus.Supported
+                            ? MessageBoxIcon.Information
+                            : MessageBoxIcon.Warning);
+
+                    return;
+                }
+
+                if (devicePurgePreflight)
+                {
+                    bool physicalDiskKnown =
+                        !string.IsNullOrWhiteSpace(plan.PhysicalDrive);
+
+                    bool diskNumberKnown =
+                        !string.IsNullOrWhiteSpace(plan.DiskNumber);
+
+                    bool nonSystemDisk = !plan.IsSystemDisk;
+
+                    bool deviceLevelDecision =
+                        plan.DeviceCommandRequired &&
+                        (plan.RecommendedStrength == SanitizationStrength.DevicePurge ||
+                         plan.RecommendedStrength == SanitizationStrength.CryptographicErase);
+
+                    bool supportedMediaForPreflight =
+                        plan.MediaKind == StorageMediaKind.Nvme ||
+                        plan.MediaKind == StorageMediaKind.SataSsd ||
+                        plan.MediaKind == StorageMediaKind.UsbFlash;
+
+                    bool safetyGate =
+                        physicalDiskKnown &&
+                        diskNumberKnown &&
+                        nonSystemDisk &&
+                        deviceLevelDecision &&
+                        supportedMediaForPreflight;
+
+                    string capability =
+                        "UNKNOWN — this dry-run does not issue a sanitize command " +
+                        "and does not claim device capability support.";
+
+                    string execution =
+                        "BLOCKED — preflight only; no device command will be executed.";
+
+                    string preflightResult =
+                        "=== VoidErase Device Purge Preflight (DRY RUN) ===\n\n" +
+                        "Physical disk: " + (physicalDiskKnown ? plan.PhysicalDrive : "(unknown)") + "\n" +
+                        "Disk number: " + (diskNumberKnown ? plan.DiskNumber : "(unknown)") + "\n" +
+                        "Model: " + (plan.Model ?? "(unknown)") + "\n" +
+                        "Media: " + plan.MediaKind + "\n" +
+                        "Bus: " + (plan.BusType ?? "(unknown)") + "\n" +
+                        "System disk: " + (plan.IsSystemDisk ? "Yes" : "No") + "\n" +
+                        "Recommended: " + plan.RecommendedStrength + "\n" +
+                        "Method: " + (plan.RecommendedMethod ?? "(unknown)") + "\n\n" +
+                        "=== Safety Gates ===\n\n" +
+                        "Physical disk identified: " + (physicalDiskKnown ? "PASS" : "FAIL") + "\n" +
+                        "Disk number identified: " + (diskNumberKnown ? "PASS" : "FAIL") + "\n" +
+                        "System-disk protection: " + (nonSystemDisk ? "PASS" : "FAIL — system disk") + "\n" +
+                        "Device-level decision: " + (deviceLevelDecision ? "PASS" : "FAIL") + "\n" +
+                        "Supported media class for preflight: " + (supportedMediaForPreflight ? "PASS" : "FAIL") + "\n\n" +
+                        "Overall safety gate: " + (safetyGate ? "PASS — eligible for a future device-level execution stage" : "BLOCKED") + "\n" +
+                        "Capability: " + capability + "\n" +
+                        "Execution: " + execution + "\n\n" +
+                        "No erase, sanitize, secure-erase, purge, or device command is executed.";
+
+                    MessageBox.Show(
+                        preflightResult,
+                        "VoidErase Device Purge Preflight",
+                        MessageBoxButtons.OK,
+                        safetyGate ? MessageBoxIcon.Information : MessageBoxIcon.Warning);
+
+                    return;
+                }
+
+                string result =
+                    "=== VoidErase Storage Sanitization V2 ===\n\n" +
+                    "Path: " + target + "\n" +
+                    "Drive: " + plan.DriveRoot + "\n" +
+                    "Media: " + plan.MediaKind + "\n" +
+                    "Model: " + (plan.Model ?? "(unknown)") + "\n" +
+                    "Bus: " + (plan.BusType ?? "(unknown)") + "\n" +
+                    "Serial: " + (string.IsNullOrWhiteSpace(plan.SerialNumber) ? "(unavailable)" : plan.SerialNumber) + "\n" +
+                    "Physical disk: " + (string.IsNullOrWhiteSpace(plan.PhysicalDrive) ? "(unknown)" : plan.PhysicalDrive) + "\n" +
+                    "Disk number: " + (string.IsNullOrWhiteSpace(plan.DiskNumber) ? "(unknown)" : plan.DiskNumber) + "\n" +
+                    "Windows media type: " + (string.IsNullOrWhiteSpace(plan.WindowsMediaType) ? "(unknown)" : plan.WindowsMediaType) + "\n" +
+                    "Encrypted: " + (plan.Encrypted ? "Yes" : "No") + "\n" +
+                    "BitLocker status: " + (string.IsNullOrWhiteSpace(plan.EncryptionStatus) ? "(unknown)" : plan.EncryptionStatus) + "\n" +
+                    "System disk: " + (plan.IsSystemDisk ? "Yes" : "No") + "\n\n" +
+                    "=== Sanitization Decision ===\n\n" +
+                    "Recommended: " + plan.RecommendedStrength + "\n" +
+                    "Method: " + plan.RecommendedMethod + "\n" +
+                    "Device command required: " + (plan.DeviceCommandRequired ? "Yes" : "No") + "\n\n" +
+                    "Reason:\n" + plan.Reason + "\n\n" +
+                    "This test only detects media/capabilities. No erase or device sanitization command is executed.";
+
+                MessageBox.Show(
+                    result,
+                    "VoidErase Storage Sanitization V2",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Information);
+
+                return;
+            }
+
             if (install)
             {
                 bool ok = InstallContextMenu(false);
@@ -1521,6 +1992,8 @@ OperationResult operationResult = new OperationResult
 operationResult.SuccessfulFiles.AddRange(operationFiles);
 operationResult.SkippedFiles.AddRange(skippedFiles);
 
+MainForm.PersistNistSanitizationRecord(operationResult);
+
 if (!isDirectory)
 {
     HistoryStore.Append(file, totalBytes, "SUCCESS", true);
@@ -1686,9 +2159,9 @@ internal sealed class MainForm : Form, IProgressReporter
 	private readonly Label hint = new();
     private readonly Button cancelButton = new();
     private readonly Button registryButton = new();
-	private readonly Button historyButton = new();
+		private readonly Button historyButton = new();
+		private readonly Button logsButton = new();
     private readonly Button languageButton = new();
-    private readonly Button updateButton = new();
     private readonly Button settingsButton = new();
     private readonly PictureBox logo = new();
     private readonly Panel fileCard = new();
@@ -1702,6 +2175,7 @@ internal sealed class MainForm : Form, IProgressReporter
     private CancellationTokenSource? cts;
     private bool running;
     private bool updateCheckRunning;
+    private UsbTargetPreflightResult? currentUsbPreflight;
 
     private static readonly Color BackgroundColor = Color.FromArgb(244, 247, 250);
     private static readonly Color CardColor = Color.White;
@@ -1771,19 +2245,13 @@ internal sealed class MainForm : Form, IProgressReporter
         subtitleLabel.ForeColor = TextSecondary;
 		subtitleLabel.Font = new Font("Segoe UI", 9.5F);
 
-        settingsButton.SetBounds(500, 22, 34, 30);
+        settingsButton.SetBounds(607, 22, 34, 30);
 settingsButton.Text = "⚙";
 settingsButton.Font = new Font("Segoe UI Symbol", 12F);
 StyleButton(settingsButton, CardColor, TextPrimary, false);
 settingsButton.FlatAppearance.BorderColor = CardBorder;
 settingsButton.Click += (_, _) => OpenSettings();
 registryToolTip.SetToolTip(settingsButton, L.T("Ayarlar", "Settings"));
-
-updateButton.SetBounds(541, 22, 100, 30);
-updateButton.Text = L.T("Güncelleme", "Update");
-StyleButton(updateButton, CardColor, TextPrimary, false);
-updateButton.FlatAppearance.BorderColor = CardBorder;
-updateButton.Click += async (_, _) => await CheckForUpdatesAsync(true);
 
         languageButton.SetBounds(648, 22, 48, 30);
         languageButton.Text = L.T("EN", "TR");
@@ -1794,8 +2262,21 @@ updateButton.Click += async (_, _) => await CheckForUpdatesAsync(true);
             Program.UpdateContextMenuLanguage();
             UpdateTexts();
         };
+        registryToolTip.SetToolTip(languageButton, L.T("Dili değiştir", "Change language"));
 
-        Controls.AddRange(new Control[] { logo, titleLabel, subtitleLabel, settingsButton, updateButton, languageButton });
+        hint.SetBounds(500, 57, 196, 18);
+        hint.Text = L.T("Güvenli silme • AES-256-GCM", "Secure erasure • AES-256-GCM");
+        hint.ForeColor = Color.FromArgb(30, 145, 88);
+        hint.Font = new Font("Segoe UI", 8F);
+        hint.TextAlign = ContentAlignment.MiddleRight;
+
+        registryLabel.SetBounds(500, 76, 196, 18);
+        registryLabel.TextAlign = ContentAlignment.MiddleRight;
+        registryLabel.ForeColor = TextSecondary;
+        registryLabel.AutoEllipsis = true;
+        registryToolTip.SetToolTip(registryLabel, "");
+
+        Controls.AddRange(new Control[] { logo, titleLabel, subtitleLabel, settingsButton, languageButton, hint, registryLabel });
     }
 
     private void BuildFileCard()
@@ -1824,12 +2305,14 @@ updateButton.Click += async (_, _) => await CheckForUpdatesAsync(true);
         selectFileButton.Text = L.T("Dosya Seç", "Select File");
         StyleButton(selectFileButton, Accent, Color.White, true);
         selectFileButton.Click += (_, _) => ChooseFiles();
+        registryToolTip.SetToolTip(selectFileButton, L.T("Dosya seç", "Select a file"));
 
         selectFolderButton.SetBounds(532, 68, 120, 30);
         selectFolderButton.Text = L.T("Klasör Seç", "Select Folder");
         StyleButton(selectFolderButton, CardColor, TextPrimary, false);
         selectFolderButton.FlatAppearance.BorderColor = CardBorder;
         selectFolderButton.Click += (_, _) => ChooseFolder();
+        registryToolTip.SetToolTip(selectFolderButton, L.T("Klasör seç", "Select a folder"));
 
         fileCard.Controls.AddRange(new Control[] { heading, fileLabel, sizeLabel, selectFileButton, selectFolderButton });
         Controls.Add(fileCard);
@@ -1872,34 +2355,38 @@ updateButton.Click += async (_, _) => await CheckForUpdatesAsync(true);
         destroyButton.SetBounds(24, 362, 322, 42);
         destroyButton.Text = L.T("KALICI OLARAK SİL", "PERMANENT DELETE");
         destroyButton.Enabled = false;
-        StyleButton(destroyButton, Danger, Color.White, true);
+        StyleButton(destroyButton, Color.FromArgb(224, 228, 233), Color.FromArgb(125, 132, 140), true);
         destroyButton.Font = new Font("Segoe UI", 9.5F, FontStyle.Bold);
         destroyButton.FlatAppearance.MouseOverBackColor = DangerHover;
         destroyButton.Click += async (_, _) => await StartDestroyAsync();
+        registryToolTip.SetToolTip(destroyButton, L.T("Seçilen dosya veya klasörü güvenli biçimde işle", "Securely process the selected file or folder"));
 
         cancelButton.SetBounds(354, 362, 342, 42);
         cancelButton.Text = L.T("İptal", "Cancel");
         StyleButton(cancelButton, CardColor, TextPrimary, false);
         cancelButton.FlatAppearance.BorderColor = CardBorder;
         cancelButton.Click += (_, _) => { if (running) cts?.Cancel(); };
+        registryToolTip.SetToolTip(cancelButton, L.T("Devam eden işlemi iptal et", "Cancel the running operation"));
 
-        registryButton.SetBounds(24, 414, 250, 34);
+        registryButton.SetBounds(24, 414, 216, 34);
 StyleButton(registryButton, CardColor, TextPrimary, false);
 registryButton.FlatAppearance.BorderColor = CardBorder;
 registryButton.Click += (_, _) => ToggleRegistry();
+registryToolTip.SetToolTip(registryButton, L.T("Windows sağ tık menüsü entegrasyonunu yönet", "Manage the Windows context-menu integration"));
 
-historyButton.SetBounds(282, 414, 165, 34);
+historyButton.SetBounds(252, 414, 216, 34);
 historyButton.Text = L.T("İşlem Geçmişi", "History");
 StyleButton(historyButton, CardColor, TextPrimary, false);
 historyButton.FlatAppearance.BorderColor = CardBorder;
 historyButton.Click += (_, _) => OpenHistory();
+registryToolTip.SetToolTip(historyButton, L.T("İşlem geçmişini aç", "Open operation history"));
 
-hint.Text = L.T(
-    "Güvenli silme • AES-256-GCM",
-    "Secure erasure • AES-256-GCM");
-hint.ForeColor = TextSecondary;
-hint.TextAlign = ContentAlignment.MiddleRight;
-hint.SetBounds(450, 414, 246, 34);
+logsButton.SetBounds(480, 414, 216, 34);
+logsButton.Text = L.T("Loglar", "Logs");
+StyleButton(logsButton, CardColor, TextPrimary, false);
+logsButton.FlatAppearance.BorderColor = CardBorder;
+logsButton.Click += (_, _) => OpenLogs();
+registryToolTip.SetToolTip(logsButton, L.T("NIST XML kayıt klasörünü aç", "Open the NIST XML records folder"));
 
         Controls.AddRange(new Control[]
 {
@@ -1907,7 +2394,7 @@ hint.SetBounds(450, 414, 246, 34);
     cancelButton,
     registryButton,
     historyButton,
-    hint
+    logsButton
 });
     }
 
@@ -1915,13 +2402,42 @@ hint.SetBounds(450, 414, 246, 34);
     {
         footerLine.SetBounds(24, 456, 672, 1);
         footerLine.BackColor = CardBorder;
+		
+PictureBox authorLogo = new()
+{
+    SizeMode = PictureBoxSizeMode.Zoom,
+    BackColor = Color.Transparent
+};
 
-        versionLabel.SetBounds(24, 463, 140, 22);
+authorLogo.SetBounds(315, 468, 90, 20);
+authorLogo.SizeMode = PictureBoxSizeMode.Zoom;
+
+try
+{
+    using (Stream? stream =
+    typeof(MainForm).Assembly.GetManifestResourceStream("tuncay_gokturk.png"))
+{
+    if (stream != null)
+    {
+        using Image source = Image.FromStream(stream);
+        authorLogo.Image = new Bitmap(source);
+    }
+}
+}
+catch
+{
+}
+
+        versionLabel.SetBounds(24, 467, 140, 22);
         versionLabel.Text = Program.DisplayVersion;
-        versionLabel.ForeColor = TextSecondary;
+        versionLabel.ForeColor = Accent;
+        versionLabel.Font = new Font("Segoe UI", 8.5F, FontStyle.Underline);
         versionLabel.TextAlign = ContentAlignment.MiddleLeft;
+        versionLabel.Cursor = Cursors.Hand;
+        registryToolTip.SetToolTip(versionLabel, L.T("Güncellemeleri denetlemek için tıklayın", "Click to check for updates"));
+        versionLabel.Click += async (_, _) => await CheckForUpdatesAsync(true);
 
-        websiteLink.SetBounds(556, 463, 140, 22);
+        websiteLink.SetBounds(548, 467, 148, 22);
         websiteLink.Text = "tuncay.net.tr";
         websiteLink.TextAlign = ContentAlignment.MiddleRight;
         websiteLink.LinkColor = Accent;
@@ -1930,14 +2446,16 @@ hint.SetBounds(450, 414, 246, 34);
         websiteLink.Cursor = Cursors.Hand;
         websiteLink.LinkBehavior = LinkBehavior.HoverUnderline;
         websiteLink.LinkClicked += (_, _) => OpenWebsite();
+        registryToolTip.SetToolTip(websiteLink, L.T("VoidErase web sitesini aç", "Open the VoidErase website"));
 
-        registryLabel.SetBounds(190, 463, 340, 22);
-        registryLabel.TextAlign = ContentAlignment.MiddleCenter;
-        registryLabel.ForeColor = TextSecondary;
-        registryLabel.AutoEllipsis = true;
-        registryToolTip.SetToolTip(registryLabel, "");
-
-        Controls.AddRange(new Control[] { footerLine, versionLabel, registryLabel, websiteLink });
+Controls.AddRange(new Control[]
+{
+    footerLine,
+    versionLabel,
+    authorLogo,
+    websiteLink
+});
+authorLogo.BringToFront();
     }
 
     private static void StyleButton(Button button, Color backColor, Color foreColor, bool accent)
@@ -1957,12 +2475,12 @@ hint.SetBounds(450, 414, 246, 34);
     {
         subtitleLabel.Text = L.T("Dosyalarınızı kalıcı olarak silin.", "Permanently erase your files.");
         languageButton.Text = L.T("EN", "TR");
-        updateButton.Text = L.T("Güncelleme", "Update");
         destroyButton.Text = L.T("KALICI OLARAK SİL", "PERMANENT DELETE");
         cancelButton.Text = L.T("İptal", "Cancel");
-		hint.Text = L.T(
+        hint.Text = L.T(
     "Güvenli silme • AES-256-GCM",
     "Secure erasure • AES-256-GCM");
+        UpdateToolTips();
         registryButton.Text = RegistryIsInstalled()
             ? L.T("Sağ Tık Menüsünü KALDIR", "REMOVE CONTEXT MENU")
             : L.T("Sağ Tık Menüsünü ETKİNLEŞTİR", "ENABLE CONTEXT MENU");
@@ -1974,6 +2492,21 @@ hint.SetBounds(450, 414, 246, 34);
         if (selectedItems.Count == 0) SetIdle();
         else RefreshSelectionSummary();
         UpdateRegistryStatus();
+    }
+
+    private void UpdateToolTips()
+    {
+        registryToolTip.SetToolTip(settingsButton, L.T("Ayarlar", "Settings"));
+        registryToolTip.SetToolTip(languageButton, L.T("Dili değiştir", "Change language"));
+        registryToolTip.SetToolTip(selectFileButton, L.T("Dosya seç", "Select a file"));
+        registryToolTip.SetToolTip(selectFolderButton, L.T("Klasör seç", "Select a folder"));
+        registryToolTip.SetToolTip(destroyButton, L.T("Seçilen dosya veya klasörü güvenli biçimde işle", "Securely process the selected file or folder"));
+        registryToolTip.SetToolTip(cancelButton, L.T("Devam eden işlemi iptal et", "Cancel the running operation"));
+        registryToolTip.SetToolTip(registryButton, L.T("Windows sağ tık menüsü entegrasyonunu yönet", "Manage the Windows context-menu integration"));
+        registryToolTip.SetToolTip(historyButton, L.T("İşlem geçmişini aç", "Open operation history"));
+        registryToolTip.SetToolTip(logsButton, L.T("NIST XML kayıt klasörünü aç", "Open the NIST XML records folder"));
+        registryToolTip.SetToolTip(versionLabel, L.T("Güncellemeleri denetlemek için tıklayın", "Click to check for updates"));
+        registryToolTip.SetToolTip(websiteLink, L.T("VoidErase web sitesini aç", "Open the VoidErase website"));
     }
 
     private void SetIdle()
@@ -1989,6 +2522,7 @@ hint.SetBounds(450, 414, 246, 34);
 
     private void SetSelection(IEnumerable<string> paths)
     {
+        currentUsbPreflight = null;
         selectedItems.Clear();
         foreach (string path in paths.Where(File.Exists))
             selectedItems.Add(path);
@@ -1997,9 +2531,89 @@ hint.SetBounds(450, 414, 246, 34);
 
     private void SetFolderSelection(string folder)
     {
+        currentUsbPreflight = null;
         selectedItems.Clear();
-        if (Directory.Exists(folder)) selectedItems.Add(folder);
+
+        if (!Directory.Exists(folder))
+        {
+            RefreshSelectionSummary();
+            return;
+        }
+
+        selectedItems.Add(folder);
         RefreshSelectionSummary();
+
+        // Root-level USB selection gets an automatic read-only target preflight.
+        // No destructive operation is triggered here.
+        string root = Path.GetPathRoot(Path.GetFullPath(folder)) ?? "";
+        string normalizedFolder = Path.GetFullPath(folder).TrimEnd(
+            Path.DirectorySeparatorChar,
+            Path.AltDirectorySeparatorChar);
+
+        string normalizedRoot = root.TrimEnd(
+            Path.DirectorySeparatorChar,
+            Path.AltDirectorySeparatorChar);
+
+        if (!string.IsNullOrWhiteSpace(root) &&
+            string.Equals(normalizedFolder, normalizedRoot,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            UsbTargetPreflightResult probe =
+                UsbTargetPreflight.AnalyzeDrive(root);
+
+            if (probe.DiskNumber >= 0 &&
+                string.Equals(probe.BusType, "USB",
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                    ShowUsbTargetPreflight(probe);
+            }
+        }
+    }
+
+    private void ShowUsbTargetPreflight(UsbTargetPreflightResult probe)
+    {
+        string state = probe.State.ToString().ToUpperInvariant();
+
+        string message =
+            "=== VoidErase USB Target Preflight ===\r\n\r\n" +
+            "Target: " + probe.DriveRoot + "\r\n" +
+            "Physical disk: " + (probe.PhysicalDrive ?? "(unknown)") + "\r\n" +
+            "Disk number: " + probe.DiskNumber + "\r\n" +
+            "Model: " + (string.IsNullOrWhiteSpace(probe.Model) ? "(unknown)" : probe.Model) + "\r\n" +
+            "Serial: " + (string.IsNullOrWhiteSpace(probe.SerialNumber) ? "(unknown)" : probe.SerialNumber) + "\r\n" +
+            "Bus: " + (string.IsNullOrWhiteSpace(probe.BusType) ? "(unknown)" : probe.BusType) + "\r\n" +
+            "Media: " + (string.IsNullOrWhiteSpace(probe.MediaType) ? "(unknown)" : probe.MediaType) + "\r\n" +
+            "Disk size: " + probe.DiskSizeBytes.ToString("N0") + " bytes\r\n" +
+            "System disk: " + (probe.IsSystem ? "Yes" : "No") + "\r\n" +
+            "Boot disk: " + (probe.IsBoot ? "Yes" : "No") + "\r\n" +
+            "Offline: " + (probe.IsOffline ? "Yes" : "No") + "\r\n" +
+            "Read-only: " + (probe.IsReadOnly ? "Yes" : "No") + "\r\n\r\n" +
+            "=== Safety Gate ===\r\n\r\n" +
+            "Result: " + state + "\r\n\r\n" +
+            "Scope:\r\n" +
+            probe.Scope +
+            "\r\n\r\n" +
+            "Reason:\r\n" +
+            probe.Reason +
+            "\r\n\r\n" +
+            "DRY RUN ONLY — no erase, overwrite, sanitize, format, " +
+            "TRIM, IOCTL or device command was executed.";
+
+        MessageBox.Show(
+            this,
+            message,
+            "VoidErase USB Target Preflight",
+            MessageBoxButtons.OK,
+            probe.State == UsbTargetPreflightState.Pass
+                ? MessageBoxIcon.Information
+                : MessageBoxIcon.Warning);
+
+        // A failed USB target preflight must not leave the destructive button enabled.
+        if (probe.State != UsbTargetPreflightState.Pass)
+        {
+            destroyButton.Enabled = false;
+            destroyButton.ForeColor = Color.FromArgb(145, 150, 157);
+        }
     }
 
     private void RefreshSelectionSummary()
@@ -2042,8 +2656,76 @@ catch
         detailLabel.Text = selectedItems.Count == 1 ? selectedItems[0] : L.T("Birden fazla öğe seçildi.", "Multiple items selected.");
         detailLabel.ForeColor = TextSecondary;
         SetProgress(0);
-        destroyButton.Enabled = selectedItems.Count > 0;
-        destroyButton.ForeColor = destroyButton.Enabled ? Color.White : Color.FromArgb(145, 150, 157);
+        bool selectionEnabled = selectedItems.Count > 0;
+
+        if (currentUsbPreflight != null &&
+            currentUsbPreflight.State != UsbTargetPreflightState.Pass)
+        {
+            selectionEnabled = false;
+        }
+
+        string blockedReason;
+        if (selectionEnabled && IsMandatoryBlockedSelection(out blockedReason))
+        {
+            selectionEnabled = false;
+            statusLabel.Text = L.T("Güvenlik nedeniyle engellendi.", "Blocked for safety.");
+            detailLabel.Text = blockedReason;
+            detailLabel.ForeColor = Danger;
+        }
+
+        destroyButton.Enabled = selectionEnabled;
+        destroyButton.BackColor = selectionEnabled ? Danger : Color.FromArgb(224, 228, 233);
+        destroyButton.ForeColor = selectionEnabled ? Color.White : Color.FromArgb(125, 132, 140);
+        destroyButton.FlatAppearance.BorderColor = selectionEnabled ? Danger : Color.FromArgb(190, 198, 207);
+        destroyButton.FlatAppearance.MouseOverBackColor = selectionEnabled ? DangerHover : Color.FromArgb(224, 228, 233);
+    }
+
+    private bool IsMandatoryBlockedSelection(out string reason)
+    {
+        foreach (string item in selectedItems)
+        {
+            string full;
+            try
+            {
+                full = Path.GetFullPath(item).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            }
+            catch
+            {
+                reason = L.T("Hedef yolu doğrulanamadı.", "The target path could not be verified.");
+                return true;
+            }
+
+            if (VoidEraseSafety.IsMandatoryProtectedPath(full))
+            {
+                reason = L.T(
+                    "Windows veya Program Files sistem yolu korunur; bu hedef seçilemez.",
+                    "Windows or Program Files system paths are protected and cannot be selected.");
+                return true;
+            }
+
+            if (VoidEraseSafety.IsSameAsExecutable(full))
+            {
+                reason = L.T(
+                    "VoidErase uygulamasının kendi EXE dosyası korunur.",
+                    "The VoidErase executable is protected.");
+                return true;
+            }
+
+            string root = Path.GetPathRoot(full) ?? "";
+            string systemRoot = Path.GetPathRoot(Environment.SystemDirectory) ?? "";
+            if (Directory.Exists(full) && !string.IsNullOrWhiteSpace(root) &&
+                string.Equals(root, systemRoot, StringComparison.OrdinalIgnoreCase) &&
+                string.Equals(full, root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar), StringComparison.OrdinalIgnoreCase))
+            {
+                reason = L.T(
+                    "Sistem sürücüsünün kökü korunur; bu hedef seçilemez.",
+                    "The root of the system drive is protected and cannot be selected.");
+                return true;
+            }
+        }
+
+        reason = "";
+        return false;
     }
 
     private void ChooseFiles()
@@ -2222,6 +2904,54 @@ private void formSafeReportProgress(
 {
     if (running || selectedItems.Count == 0)
         return;
+
+    string blockedReason;
+    if (IsMandatoryBlockedSelection(out blockedReason))
+    {
+        MessageBox.Show(
+            this,
+            blockedReason,
+            L.T("İşlem engellendi", "Operation blocked"),
+            MessageBoxButtons.OK,
+            MessageBoxIcon.Warning);
+        RefreshSelectionSummary();
+        return;
+    }
+
+    // Final read-only USB target recheck immediately before confirmation.
+    // This does not erase or modify the device.
+    if (selectedItems.Count == 1 && Directory.Exists(selectedItems[0]))
+    {
+        string selectedFullPath = Path.GetFullPath(selectedItems[0]);
+        string selectedRoot = Path.GetPathRoot(selectedFullPath) ?? "";
+        string normalizedSelected = selectedFullPath.TrimEnd(
+            Path.DirectorySeparatorChar,
+            Path.AltDirectorySeparatorChar);
+        string normalizedSelectedRoot = selectedRoot.TrimEnd(
+            Path.DirectorySeparatorChar,
+            Path.AltDirectorySeparatorChar);
+
+        if (!string.IsNullOrWhiteSpace(selectedRoot) &&
+            string.Equals(normalizedSelected, normalizedSelectedRoot,
+                StringComparison.OrdinalIgnoreCase))
+        {
+            UsbTargetPreflightResult finalUsbProbe =
+                UsbTargetPreflight.AnalyzeDrive(selectedRoot);
+
+            if (finalUsbProbe.DiskNumber >= 0 &&
+                string.Equals(finalUsbProbe.BusType, "USB",
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                currentUsbPreflight = finalUsbProbe;
+
+                if (finalUsbProbe.State != UsbTargetPreflightState.Pass)
+                {
+                    ShowUsbTargetPreflight(finalUsbProbe);
+                    return;
+                }
+            }
+        }
+    }
 
     if (L.ConfirmBeforeErase)
     {
@@ -2513,6 +3243,7 @@ else
 
 selectedItems.Clear();
 
+PersistNistSanitizationRecord(result);
 ShowOperationSummary(result);
     }
     catch (OperationCanceledException)
@@ -2539,6 +3270,7 @@ ShowOperationSummary(result);
                     completedBytes * 100L / totalBytes)
                 : 0);
 
+        PersistNistSanitizationRecord(result);
         ShowOperationSummary(result);
     }
     finally
@@ -2551,13 +3283,37 @@ ShowOperationSummary(result);
     }
 }
 
+    internal static void PersistNistSanitizationRecord(OperationResult result)
+    {
+        try
+        {
+            NistSanitizationRecord record =
+                NistSanitizationRecordFactory.FromOperationResult(result, L.English);
+            string path = NistSanitizationRecordStore.Save(record);
+            result.NistRecordPath = path;
+            result.NistCompatibility = record.Compatibility;
+            result.NistValidationRequired = record.ValidationRequired;
+            result.NistDecisionReason = record.DecisionReason;
+            result.NistMediaSummary =
+                (record.Media.MediaType ?? "") + " / " +
+                (record.Media.Model ?? "") + " / " +
+                (record.Media.PhysicalDrive ?? "");
+            VoidEraseLogger.Write("NIST sanitization record saved: " + path);
+        }
+        catch (Exception ex)
+        {
+            // A reporting failure must never convert a completed erase result
+            // into a false failure. Keep the failure visible in the application log.
+            VoidEraseLogger.Error("NIST sanitization record could not be saved.", ex);
+        }
+    }
+
     private void SetControlsRunning(bool active)
     {
         selectFileButton.Enabled = !active;
         selectFolderButton.Enabled = !active;
         destroyButton.Enabled = false;
         registryButton.Enabled = !active;
-        updateButton.Enabled = !active;
         settingsButton.Enabled = !active;
         languageButton.Enabled = !active;
         cancelButton.Enabled = active;
@@ -2601,9 +3357,10 @@ ShowOperationSummary(result);
     {
         bool installed = RegistryIsInstalled();
 		historyButton.Text = L.T("İşlem Geçmişi", "History");
+		logsButton.Text = L.T("Loglar", "Logs");
         registryButton.Text = installed ? L.T("Sağ Tık Menüsünü KALDIR", "REMOVE CONTEXT MENU") : L.T("Sağ Tık Menüsünü ETKİNLEŞTİR", "ENABLE CONTEXT MENU");
-        registryLabel.Text = installed ? L.T("✓ Sağ tık menüsü etkin.", "✓ Context menu enabled.") : L.T("Sağ tık menüsü etkin değil.", "Context menu is not enabled.");
-        registryLabel.ForeColor = installed ? Color.FromArgb(30, 145, 88) : TextSecondary;
+        registryLabel.Text = installed ? L.T("✓ Sağ tık menüsü etkin.", "✓ Context menu enabled.") : L.T("✕ Sağ tık menüsü etkin değil.", "✕ Context menu is not enabled.");
+        registryLabel.ForeColor = installed ? Color.FromArgb(30, 145, 88) : Color.FromArgb(198, 70, 70);
         registryToolTip.SetToolTip(registryLabel, installed ? Program.GetExePath() : L.T("Kurulu değil.", "Not installed."));
     }
 
@@ -2617,8 +3374,30 @@ ShowOperationSummary(result);
         }
     }
 
-private void OpenHistory()
-{
+    private void OpenLogs()
+    {
+        try
+        {
+            Directory.CreateDirectory(NistSanitizationRecordStore.RecordDirectory);
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = "explorer.exe",
+                Arguments = "\"" + NistSanitizationRecordStore.RecordDirectory + "\"",
+                UseShellExecute = true
+            });
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(
+                L.T("Log klasörü açılamadı.\\n\\n" + ex.Message, "The log folder could not be opened.\\n\\n" + ex.Message),
+                L.T("Loglar", "Logs"),
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning);
+        }
+    }
+
+    private void OpenHistory()
+    {
     if (running)
         return;
 
@@ -2635,8 +3414,8 @@ private void OpenHistory()
     {
         if (updateCheckRunning || running) return;
         updateCheckRunning = true;
-        string original = updateButton.Text;
-        if (interactive) { updateButton.Enabled = false; updateButton.Text = L.T("Kontrol...", "Checking..."); }
+        string original = versionLabel.Text;
+        if (interactive) { versionLabel.Enabled = false; versionLabel.Text = L.T("Kontrol...", "Checking..."); }
         try
         {
             using HttpClient client = new();
@@ -2673,7 +3452,7 @@ private void OpenHistory()
             else interactive = MessageBox.Show(this, L.T($"Yeni sürüm v{latest} bulundu.\n\nŞimdi indirip yüklemek ister misiniz?", $"New version v{latest} is available.\n\nDownload and install it now?"), L.T("Güncelleme", "Update"), MessageBoxButtons.YesNo, MessageBoxIcon.Information) == DialogResult.Yes;
             if (!interactive) return;
 
-            updateButton.Text = L.T("İndiriliyor...", "Downloading...");
+            if (interactive) versionLabel.Text = L.T("İndiriliyor...", "Downloading...");
             string target = Program.GetExePath();
             string temp = target + ".update";
             if (File.Exists(temp)) File.Delete(temp);
@@ -2702,7 +3481,7 @@ private void OpenHistory()
         finally
         {
             updateCheckRunning = false;
-            if (!IsDisposed) { updateButton.Enabled = true; updateButton.Text = original; }
+            if (!IsDisposed) { versionLabel.Enabled = true; versionLabel.Text = original; }
         }
     }
 
@@ -2846,7 +3625,7 @@ internal sealed class SettingsForm : Form
     public SettingsForm()
     {
         Text = L.T("Ayarlar", "Settings");
-        ClientSize = new Size(520, 560);
+        ClientSize = new Size(520, 470);
         StartPosition = FormStartPosition.CenterParent;
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
@@ -2860,16 +3639,17 @@ internal sealed class SettingsForm : Form
             Font = new Font("Segoe UI", 14F, FontStyle.Bold),
             ForeColor = Color.FromArgb(31, 42, 52)
         };
-        title.SetBounds(24, 20, 420, 28);
+        title.SetBounds(24, 16, 450, 28);
 
         Label langLabel = new()
         {
             Text = L.T("Dil", "Language"),
             ForeColor = Color.FromArgb(101, 115, 130)
         };
-        langLabel.SetBounds(24, 65, 100, 22);
+        langLabel.AutoSize = true;
+        langLabel.Location = new Point(24, 52);
 
-        language.SetBounds(145, 62, 210, 28);
+        language.SetBounds(langLabel.Right + 8, 49, 85, 28);
         language.DropDownStyle = ComboBoxStyle.DropDownList;
         language.Items.AddRange(new object[] { "Türkçe", "English" });
         language.SelectedIndex = L.Turkish ? 0 : 1;
@@ -2878,7 +3658,7 @@ internal sealed class SettingsForm : Form
             "Silmeden önce onay iste",
             "Ask for confirmation before erasing");
         confirm.Checked = L.ConfirmBeforeErase;
-        confirm.SetBounds(24, 108, 450, 24);
+        confirm.SetBounds(24, 88, 470, 24);
 		
 var hidden = new CheckBox
 {
@@ -2889,34 +3669,31 @@ var hidden = new CheckBox
     AutoSize = true
 };
 
-hidden.SetBounds(24, 142, 450, 24);
+hidden.SetBounds(24, 116, 470, 24);
 
-Controls.Add(hidden);
-
-Controls.Add(hidden);
         autoUpdate.Text = L.T(
             "Başlangıçta güncellemeleri kontrol et",
             "Check for updates at startup");
         autoUpdate.Checked = L.AutoUpdate;
-        autoUpdate.SetBounds(24, 172, 450, 24);
+        autoUpdate.SetBounds(24, 144, 470, 24);
 
         protectSystem.Text = L.T(
             "Windows sistem klasörlerini koru",
             "Protect Windows system folders");
         protectSystem.Checked = VoidEraseSettings.ProtectSystemPaths;
-        protectSystem.SetBounds(24, 204, 450, 24);
+        protectSystem.SetBounds(24, 172, 470, 24);
 
         protectSystemDrive.Text = L.T(
             "Sistem sürücüsü kökünü koru (örn. C:\\)",
             "Protect system drive root (e.g. C:\\)");
         protectSystemDrive.Checked = VoidEraseSettings.ProtectSystemDrive;
-        protectSystemDrive.SetBounds(24, 236, 450, 24);
+        protectSystemDrive.SetBounds(24, 200, 470, 24);
 
 skipReparsePoints.Text = L.T(
     "Junction / symlink öğelerini atla ve devam et",
     "Skip junction / symlink items and continue");
 skipReparsePoints.Checked = VoidEraseSettings.SkipReparsePoints;
-skipReparsePoints.SetBounds(24, 268, 450, 24);
+skipReparsePoints.SetBounds(24, 228, 470, 24);
 
 
 Label protectedLabel = new()
@@ -2927,8 +3704,8 @@ Label protectedLabel = new()
             Font = new Font("Segoe UI", 9F, FontStyle.Bold),
             ForeColor = Color.FromArgb(55, 69, 82)
         };
-        protectedLabel.SetBounds(24, 300, 300, 22);
-        protectedPaths.SetBounds(24, 326, 350, 90);
+        protectedLabel.SetBounds(24, 256, 350, 22);
+        protectedPaths.SetBounds(24, 282, 360, 82);
         protectedPaths.HorizontalScrollbar = true;
         protectedPaths.SelectionMode = SelectionMode.One;
 
@@ -2936,32 +3713,32 @@ Label protectedLabel = new()
             protectedPaths.Items.Add(path);
 
         addProtectedPath.Text = L.T("Ekle", "Add");
-        addProtectedPath.SetBounds(385, 326, 100, 32);
+        addProtectedPath.SetBounds(394, 282, 100, 32);
         addProtectedPath.Click += (_, _) => AddProtectedPath();
 
         removeProtectedPath.Text = L.T("Kaldır", "Remove");
-        removeProtectedPath.SetBounds(385, 366, 100, 32);
+        removeProtectedPath.SetBounds(394, 320, 100, 32);
         removeProtectedPath.Click += (_, _) => RemoveProtectedPath();
 
         keepLogs.Text = L.T(
             "İşlem günlüklerini tut",
             "Keep operation logs");
         keepLogs.Checked = VoidEraseSettings.KeepLogs;
-        keepLogs.SetBounds(24, 450, 450, 24);
+        keepLogs.SetBounds(24, 378, 470, 24);
 
         Button ok = new()
         {
             Text = "OK",
             DialogResult = DialogResult.OK
         };
-        ok.SetBounds(293, 485, 80, 32);
+        ok.SetBounds(311, 426, 80, 32);
 
         Button cancel = new()
         {
             Text = L.T("İptal", "Cancel"),
             DialogResult = DialogResult.Cancel
         };
-        cancel.SetBounds(383, 485, 95, 32);
+        cancel.SetBounds(401, 426, 95, 32);
 
         AcceptButton = ok;
         CancelButton = cancel;
@@ -2972,6 +3749,7 @@ Label protectedLabel = new()
             langLabel,
             language,
             confirm,
+            hidden,
             autoUpdate,
             protectSystem,
             protectSystemDrive,

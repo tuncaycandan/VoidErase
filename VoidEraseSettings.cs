@@ -15,8 +15,10 @@ internal static class VoidEraseSettings
         get => GetBool(nameof(AskBeforeDeletion), true);
         set => SetBool(nameof(AskBeforeDeletion), value);
     }
-
-    public static bool ProtectSystemPaths
+	
+	public static bool DeleteHiddenFiles { get; set; } = false;
+    
+	public static bool ProtectSystemPaths
     {
         get => GetBool(nameof(ProtectSystemPaths), true);
         set => SetBool(nameof(ProtectSystemPaths), value);

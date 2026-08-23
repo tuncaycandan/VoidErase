@@ -35,6 +35,30 @@ internal static class VoidEraseSafety
         }
     }
 
+    // Arayüz ve dosya düzeyi silme akışı için değiştirilemez koruma.
+    // Kullanıcı ayarları bu iki sistem ağacını açamaz.
+    public static bool IsMandatoryProtectedPath(string path)
+    {
+        try
+        {
+            string full = Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            string windows = Path.GetFullPath(Environment.GetFolderPath(Environment.SpecialFolder.Windows))
+                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            string programFiles = Path.GetFullPath(Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles))
+                .TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+            string programFilesX86 = Environment.GetFolderPath(Environment.SpecialFolder.ProgramFilesX86);
+
+            return full.Equals(windows, StringComparison.OrdinalIgnoreCase)
+                || full.StartsWith(windows + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
+                || full.Equals(programFiles, StringComparison.OrdinalIgnoreCase)
+                || full.StartsWith(programFiles + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)
+                || (!string.IsNullOrWhiteSpace(programFilesX86) &&
+                    (full.Equals(programFilesX86, StringComparison.OrdinalIgnoreCase) ||
+                     full.StartsWith(programFilesX86 + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase)));
+        }
+        catch { return true; }
+    }
+
     public static bool IsSameAsExecutable(string path)
     {
         try

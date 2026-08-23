@@ -1,6 +1,8 @@
 using System;
+using System.Diagnostics;
 using System.Drawing;
 using System.IO;
+
 using System.Windows.Forms;
 
 namespace VoidErase;
@@ -242,20 +244,29 @@ Controls.Add(metadataHeading);
 
 Panel metadataCard = CreateCard(20, 400, 640, 70);
 
+string validationText = english
+    ? (result.NistValidationRequired ? "Yes" : "No")
+    : (result.NistValidationRequired ? "Evet" : "Hayır");
+
+string metadataText = english
+    ? "Method: Cryptographic transformation + verified deletion    •    " +
+      "Scope: Application-level file sanitization    •    " +
+      "Verification: AES-256-GCM + SHA-256    •    " +
+      "NIST SP 800-88 Rev. 2: terminology-aligned reporting only; " +
+      "media-level sanitization is not claimed.\n" +
+      "Decision: " + result.NistCompatibility + " • Validation required: " + validationText + "\n" +
+      "Media: " + result.NistMediaSummary + "\n" + result.NistDecisionReason
+    : "Yöntem: Kriptografik dönüştürme + doğrulanmış silme    •    " +
+      "Kapsam: Uygulama düzeyi dosya sanitizasyonu    •    " +
+      "Doğrulama: AES-256-GCM + SHA-256    •    " +
+      "NIST SP 800-88 Rev. 2: yalnızca terminoloji uyumlu raporlama; " +
+      "medya düzeyi sanitizasyon iddia edilmez.\n" +
+      "Karar: " + result.NistCompatibility + " • Validasyon gerekli: " + validationText + "\n" +
+      "Medya: " + result.NistMediaSummary + "\n" + result.NistDecisionReason;
+
 Label metadata = new()
 {
-    Text = english
-        ? "Method: Cryptographic transformation + verified deletion    •    " +
-          "Scope: Application-level file sanitization    •    " +
-          "Verification: AES-256-GCM + SHA-256    •    " +
-          "NIST SP 800-88 Rev. 2: terminology-aligned reporting only; " +
-          "media-level sanitization is not claimed."
-        : "Yöntem: Kriptografik dönüştürme + doğrulanmış silme    •    " +
-          "Kapsam: Uygulama düzeyi dosya sanitizasyonu    •    " +
-          "Doğrulama: AES-256-GCM + SHA-256    •    " +
-          "NIST SP 800-88 Rev. 2: yalnızca terminoloji uyumlu raporlama; " +
-          "medya düzeyi sanitizasyon iddia edilmez.",
-
+    Text = metadataText,
     Location = new Point(16, 12),
     Size = new Size(608, 46),
     Font = new Font("Segoe UI", 8.5F, FontStyle.Bold),
@@ -317,12 +328,86 @@ Controls.Add(metadataCard);
         methodCard.Controls.Add(method);
         Controls.Add(methodCard);
 
+        bool hasNistRecord = !string.IsNullOrWhiteSpace(result.NistRecordPath) && File.Exists(result.NistRecordPath);
+        Button htmlButton = new()
+        {
+            Text = english ? "HTML" : "HTML Raporu",
+            Size = new Size(105, 34),
+            Location = new Point(260, 570),
+            FlatStyle = FlatStyle.Flat,
+            BackColor = CardColor,
+            ForeColor = TextPrimary,
+            UseVisualStyleBackColor = false,
+            Cursor = Cursors.Hand,
+            Enabled = hasNistRecord
+        };
+        htmlButton.Click += (sender, e) =>
+        {
+            try
+            {
+                string path = NistReportExporter.ExportHtml(result.NistRecordPath, english);
+                Process.Start(new ProcessStartInfo(path) { UseShellExecute = true });
+            }
+            catch (Exception ex) { MessageBox.Show(ex.Message, english ? "Report" : "Rapor", MessageBoxButtons.OK, MessageBoxIcon.Warning); }
+        };
+        Controls.Add(htmlButton);
+
+        Button pdfButton = new()
+        {
+            Text = english ? "PDF" : "PDF Raporu",
+            Size = new Size(105, 34),
+            Location = new Point(370, 570),
+            FlatStyle = FlatStyle.Flat,
+            BackColor = CardColor,
+            ForeColor = TextPrimary,
+            UseVisualStyleBackColor = false,
+            Cursor = Cursors.Hand,
+            Enabled = hasNistRecord
+        };
+        pdfButton.Click += (sender, e) =>
+        {
+            try
+            {
+                string htmlPath = NistReportExporter.ExportHtml(result.NistRecordPath, english);
+                string pdfPath = NistReportExporter.ExportPdf(htmlPath, english);
+                Process.Start(new ProcessStartInfo(pdfPath) { UseShellExecute = true });
+            }
+            catch (Exception ex) { MessageBox.Show(ex.Message, english ? "Report" : "Rapor", MessageBoxButtons.OK, MessageBoxIcon.Warning); }
+        };
+        Controls.Add(pdfButton);
+
+        Button nistButton = new()
+        {
+            Text = english ? "NIST XML" : "NIST XML",
+            Size = new Size(95, 34),
+            Location = new Point(480, 570),
+            FlatStyle = FlatStyle.Flat,
+            BackColor = CardColor,
+            ForeColor = TextPrimary,
+            UseVisualStyleBackColor = false,
+            Cursor = Cursors.Hand,
+            Enabled = !string.IsNullOrWhiteSpace(result.NistRecordPath) && File.Exists(result.NistRecordPath)
+        };
+        nistButton.FlatAppearance.BorderSize = 1;
+        nistButton.FlatAppearance.BorderColor = BorderColor;
+        nistButton.Click += (sender, e) =>
+        {
+            try
+            {
+                if (File.Exists(result.NistRecordPath))
+                    Process.Start(new ProcessStartInfo(result.NistRecordPath) { UseShellExecute = true });
+            }
+            catch { }
+        };
+        Controls.Add(nistButton);
+
         Button close = new()
+
         {
             Text = english ? "Close" : "Kapat",
             DialogResult = DialogResult.OK,
-            Size = new Size(110, 34),
-            Location = new Point(550, 570),
+Size = new Size(95, 34),
+            Location = new Point(580, 570),
             FlatStyle = FlatStyle.Flat,
             BackColor = CardColor,
             ForeColor = TextPrimary,
