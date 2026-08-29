@@ -71,9 +71,12 @@ public sealed class NistSanitizationRecord
     public string DecisionReason { get; set; } = "";
     public string Language { get; set; } = "tr";
     public string ProviderName { get; set; } = "";
+    public string ProviderVersion { get; set; } = "";
     public string EvidencePath { get; set; } = "";
     public bool IdentityMatch { get; set; }
     public string IdentityValidation { get; set; } = "";
+    public SanitizationIdentitySnapshot PreOperationIdentity { get; set; }
+    public SanitizationIdentitySnapshot PostOperationIdentity { get; set; }
     public NistMediaIdentity Media { get; set; } = new NistMediaIdentity();
     public NistVerificationRecord Verification { get; set; } = new NistVerificationRecord();
     public int TotalFiles { get; set; }
@@ -126,9 +129,14 @@ internal static class NistSanitizationRecordFactory
             DecisionReason = decision == null ? (english ? "Media decision was not available." : "Medya kararı alınamadı.") : LocalizeDecisionReason(decision, english),
             Language = english ? "en" : "tr",
             ProviderName = english ? "VoidErase dry-run provider" : "VoidErase dry-run sağlayıcısı",
+            ProviderVersion = "1.4.0",
             EvidencePath = "",
-            IdentityMatch = false,
-            IdentityValidation = english ? "Pre/post device identity comparison was not performed." : "İşlem öncesi/sonrası aygıt kimliği karşılaştırması uygulanmadı.",
+            IdentityMatch = result.IdentityMatch,
+            IdentityValidation = string.IsNullOrWhiteSpace(result.IdentityValidation)
+                ? (english ? "Pre/post device identity comparison was not performed." : "İşlem öncesi/sonrası aygıt kimliği karşılaştırması uygulanmadı.")
+                : result.IdentityValidation,
+            PreOperationIdentity = result.PreOperationIdentity,
+            PostOperationIdentity = result.PostOperationIdentity,
             ClaimAllowed = false,
             ClaimLimitation = english ? "This record does not claim physical-media Purge or Destroy. It records only application-level processing and verification." : "Bu kayıt fiziksel medya Purge veya Destroy iddiasında bulunmaz. Yalnızca uygulama düzeyi işleme ve doğrulamayı kaydeder.",
             Media = media,

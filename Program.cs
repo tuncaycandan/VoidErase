@@ -12,6 +12,7 @@ using System.Security.Cryptography;
 using System.Runtime.InteropServices;
 using System.Reflection;
 using System.Threading.Tasks;
+using System.Text;
 using System.Windows.Forms;
 using Microsoft.Win32;
 
@@ -171,7 +172,8 @@ internal static class Program
         bool devicePurgeCapabilityTest = false;
 		bool hddPreflight = false;
 		
-		bool hddExecutionDryRun = false;
+        bool hddExecutionDryRun = false;
+        bool benchmark = false;
         string? mediaInfoPath = null;
         int? mediaInfoDiskNumber = null;
 
@@ -277,6 +279,14 @@ case "--hdd-preflight":
                     }
                     break;
 
+                case "--benchmark":
+                    benchmark = true;
+                    if (i + 1 < args.Length && !args[i + 1].StartsWith("--", StringComparison.Ordinal))
+                        mediaInfoPath = args[++i].Trim('"');
+                    else
+                        throw new ArgumentException("--benchmark requires a directory path.");
+                    break;
+
                 default:
                     if (!args[i].StartsWith("--", StringComparison.Ordinal))
                         file ??= args[i].Trim('"');
@@ -286,7 +296,31 @@ case "--hdd-preflight":
 
         try
         {
-			if (hddPreflight)
+			            if (benchmark)
+            {
+                string benchmarkDirectory = string.IsNullOrWhiteSpace(mediaInfoPath)
+                    ? string.Empty
+                    : Path.GetFullPath(mediaInfoPath);
+
+                if (!Directory.Exists(benchmarkDirectory))
+                {
+                    MessageBox.Show(
+                        L.T(
+                            "Benchmark klasörü bulunamadı. Önce mevcut bir test klasörü oluşturun ve komutu bu klasörün tam yolu ile çalıştırın.\n\nÖrnek: VoidErase.exe --benchmark \\\"C:\\\\VoidErase-Test\\\"",
+                            "The benchmark directory was not found. Create an existing test folder first and run the command with its full path.\n\nExample: VoidErase.exe --benchmark \\\"C:\\\\VoidErase-Test\\\""),
+                        L.T("Benchmark yolu geçersiz", "Invalid benchmark path"),
+                        MessageBoxButtons.OK,
+                        MessageBoxIcon.Warning);
+                    return;
+                }
+
+                string output = PerformanceBenchmark.Run(benchmarkDirectory);
+                Console.WriteLine("Benchmark tamamlandı: " + output);
+                return;
+            }
+
+            if (hddPreflight)
+
 {
     try
     {
@@ -875,14 +909,22 @@ if ((info.Attributes & FileAttributes.ReadOnly) != 0)
 
         CryptoCompat.WriteAll(output, new byte[] { (byte)'P', (byte)'D', (byte)'S', (byte)'1' });
         output.WriteByte(1);
-        CryptoCompat.WriteAll(output, BitConverter.GetBytes(ChunkSize));
-        CryptoCompat.WriteAll(output, BitConverter.GetBytes(total));
-        CryptoCompat.WriteAll(output, BitConverter.GetBytes(chunks));
+        byte[] intMetadata = new byte[4];
+        byte[] longMetadata = new byte[8];
+        WriteInt32(intMetadata, ChunkSize);
+        CryptoCompat.WriteAll(output, intMetadata);
+        WriteInt64(longMetadata, total);
+        CryptoCompat.WriteAll(output, longMetadata);
+        WriteInt64(longMetadata, chunks);
+        CryptoCompat.WriteAll(output, longMetadata);
         CryptoCompat.WriteAll(output, headerNonce);
 
-        byte[] plain = new byte[ChunkSize];
-        byte[] cipher = new byte[ChunkSize];
+        using SecureRentedBuffer plainLease = SecureRentedBuffer.Rent(ChunkSize);
+        using SecureRentedBuffer cipherLease = SecureRentedBuffer.Rent(ChunkSize);
+        byte[] plain = plainLease.Buffer;
+        byte[] cipher = cipherLease.Buffer;
         byte[] tag = new byte[16];
+        byte[] nonce = new byte[12];
         using IncrementalHash sourceHash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
 
         using AesGcmCompat aes = new AesGcmCompat(key);
@@ -893,20 +935,20 @@ if ((info.Attributes & FileAttributes.ReadOnly) != 0)
             int read = ReadChunk(input, plain);
             if (read == 0) break;
 
-            byte[] nonce = MakeNonce(headerNonce, index);
+            MakeNonce(headerNonce, index, nonce);
             sourceHash.AppendData(plain, 0, read);
 
             aes.Encrypt(nonce, plain, 0, read,
                 cipher, 0, tag);
 
-            CryptoCompat.WriteAll(output, BitConverter.GetBytes(read));
+            WriteInt32(intMetadata, read);
+            CryptoCompat.WriteAll(output, intMetadata);
             CryptoCompat.WriteAll(output, nonce);
             CryptoCompat.WriteAll(output, tag);
             output.Write(cipher, 0, read);
 
             CryptoCompat.ZeroMemory(nonce);
             CryptoCompat.ZeroMemory(tag);
-            tag = new byte[16];
             index++;
         }
 
@@ -922,7 +964,8 @@ if ((info.Attributes & FileAttributes.ReadOnly) != 0)
     private static void ValidateContainerSilent(
         string path, byte[] key, byte[] expectedHeaderNonce)
     {
-        using FileStream fs = new(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+        using FileStream fs = new(path, FileMode.Open, FileAccess.Read, FileShare.Read,
+            1024 * 1024, FileOptions.SequentialScan);
 
         byte[] magic = new byte[4];
         ReadExactly(fs, magic);
@@ -951,8 +994,10 @@ if ((info.Attributes & FileAttributes.ReadOnly) != 0)
         if (chunkSize != ChunkSize || total < 0 || chunks < 0)
             throw new InvalidDataException(L.T("Container bilgileri geçersiz.", "Invalid container information."));
 
-        byte[] cipher = new byte[ChunkSize];
-        byte[] plain = new byte[ChunkSize];
+        using SecureRentedBuffer cipherLease = SecureRentedBuffer.Rent(ChunkSize);
+        using SecureRentedBuffer plainLease = SecureRentedBuffer.Rent(ChunkSize);
+        byte[] cipher = cipherLease.Buffer;
+        byte[] plain = plainLease.Buffer;
         byte[] tag = new byte[16];
 
         using AesGcmCompat aes = new AesGcmCompat(key);
@@ -979,7 +1024,6 @@ if ((info.Attributes & FileAttributes.ReadOnly) != 0)
 
             CryptoCompat.ZeroMemory(nonce);
             CryptoCompat.ZeroMemory(tag);
-            tag = new byte[16];
         }
 
         byte[] expectedDigest = new byte[32];
@@ -1496,7 +1540,7 @@ if (verification.Status != VerificationStatus.Verified)
         }
     }
 
-    private static void EncryptChunks(
+    internal static void EncryptChunks(
         string source, string destination,
         byte[] key, byte[] headerNonce, IProgressReporter form)
     {
@@ -1514,14 +1558,22 @@ if (verification.Status != VerificationStatus.Verified)
 
         CryptoCompat.WriteAll(output, new byte[] { (byte)'P', (byte)'D', (byte)'S', (byte)'1' });
         output.WriteByte(1);
-        CryptoCompat.WriteAll(output, BitConverter.GetBytes(ChunkSize));
-        CryptoCompat.WriteAll(output, BitConverter.GetBytes(total));
-        CryptoCompat.WriteAll(output, BitConverter.GetBytes(chunks));
+        byte[] intMetadata = new byte[4];
+        byte[] longMetadata = new byte[8];
+        WriteInt32(intMetadata, ChunkSize);
+        CryptoCompat.WriteAll(output, intMetadata);
+        WriteInt64(longMetadata, total);
+        CryptoCompat.WriteAll(output, longMetadata);
+        WriteInt64(longMetadata, chunks);
+        CryptoCompat.WriteAll(output, longMetadata);
         CryptoCompat.WriteAll(output, headerNonce);
 
-        byte[] plain = new byte[ChunkSize];
-        byte[] cipher = new byte[ChunkSize];
+        using SecureRentedBuffer plainLease = SecureRentedBuffer.Rent(ChunkSize);
+        using SecureRentedBuffer cipherLease = SecureRentedBuffer.Rent(ChunkSize);
+        byte[] plain = plainLease.Buffer;
+        byte[] cipher = cipherLease.Buffer;
         byte[] tag = new byte[16];
+        byte[] nonce = new byte[12];
         using IncrementalHash sourceHash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
 
         using AesGcmCompat aes = new AesGcmCompat(key);
@@ -1536,14 +1588,15 @@ if (verification.Status != VerificationStatus.Verified)
             int read = ReadChunk(input, plain);
             if (read == 0) break;
 
-            byte[] nonce = MakeNonce(headerNonce, index);
+            MakeNonce(headerNonce, index, nonce);
             sourceHash.AppendData(plain, 0, read);
 
             aes.Encrypt(nonce,
                 plain, 0, read,
                 cipher, 0, tag);
 
-            CryptoCompat.WriteAll(output, BitConverter.GetBytes(read));
+            WriteInt32(intMetadata, read);
+            CryptoCompat.WriteAll(output, intMetadata);
             CryptoCompat.WriteAll(output, nonce);
             CryptoCompat.WriteAll(output, tag);
             output.Write(cipher, 0, read);
@@ -1555,7 +1608,6 @@ if (verification.Status != VerificationStatus.Verified)
 
             CryptoCompat.ZeroMemory(nonce);
             CryptoCompat.ZeroMemory(tag);
-            tag = new byte[16];
         }
 
         byte[] sourceDigest = sourceHash.GetHashAndReset();
@@ -1568,10 +1620,11 @@ if (verification.Status != VerificationStatus.Verified)
         CryptoCompat.ZeroMemory(tag);
     }
 
-    private static void ValidateContainer(
+    internal static void ValidateContainer(
         string path, byte[] key, byte[] expectedHeaderNonce, IProgressReporter form)
     {
-        using FileStream fs = new(path, FileMode.Open, FileAccess.Read, FileShare.Read);
+        using FileStream fs = new(path, FileMode.Open, FileAccess.Read, FileShare.Read,
+            1024 * 1024, FileOptions.SequentialScan);
 
         byte[] magic = new byte[4];
         ReadExactly(fs, magic);
@@ -1604,8 +1657,10 @@ if (verification.Status != VerificationStatus.Verified)
         if (chunkSize != ChunkSize || total < 0 || chunks < 0)
             throw new InvalidDataException(L.T("Container bilgileri geçersiz.", "Invalid container information."));
 
-        byte[] cipher = new byte[ChunkSize];
-        byte[] plain = new byte[ChunkSize];
+        using SecureRentedBuffer cipherLease = SecureRentedBuffer.Rent(ChunkSize);
+        using SecureRentedBuffer plainLease = SecureRentedBuffer.Rent(ChunkSize);
+        byte[] cipher = cipherLease.Buffer;
+        byte[] plain = plainLease.Buffer;
         byte[] tag = new byte[16];
 
         using AesGcmCompat aes = new AesGcmCompat(key);
@@ -1640,7 +1695,6 @@ if (verification.Status != VerificationStatus.Verified)
 
             CryptoCompat.ZeroMemory(nonce);
             CryptoCompat.ZeroMemory(tag);
-            tag = new byte[16];
         }
 
         byte[] expectedDigest = new byte[32];
@@ -1658,16 +1712,38 @@ if (verification.Status != VerificationStatus.Verified)
         CryptoCompat.ZeroMemory(tag);
     }
 
+    private static void WriteInt32(byte[] buffer, int value)
+    {
+        buffer[0] = (byte)value;
+        buffer[1] = (byte)(value >> 8);
+        buffer[2] = (byte)(value >> 16);
+        buffer[3] = (byte)(value >> 24);
+    }
+
+    private static void WriteInt64(byte[] buffer, long value)
+    {
+        unchecked
+        {
+            ulong bits = (ulong)value;
+            for (int i = 0; i < 8; i++)
+                buffer[i] = (byte)(bits >> (i * 8));
+        }
+    }
+
     private static byte[] MakeNonce(byte[] headerNonce, long index)
     {
         byte[] nonce = new byte[12];
+        MakeNonce(headerNonce, index, nonce);
+        return nonce;
+    }
+
+    private static void MakeNonce(byte[] headerNonce, long index, byte[] nonce)
+    {
         Buffer.BlockCopy(headerNonce, 0, nonce, 0, 12);
 
         byte[] idx = BitConverter.GetBytes(index);
         for (int i = 0; i < 8; i++)
             nonce[4 + i] ^= idx[i];
-
-        return nonce;
     }
 
     private static int ReadChunk(FileStream fs, byte[] buffer)
@@ -2176,6 +2252,7 @@ internal sealed class MainForm : Form, IProgressReporter
     private bool running;
     private bool updateCheckRunning;
     private UsbTargetPreflightResult? currentUsbPreflight;
+    private int lastProgressDispatchTick;
 
     private static readonly Color BackgroundColor = Color.FromArgb(244, 247, 250);
     private static readonly Color CardColor = Color.White;
@@ -2221,6 +2298,31 @@ internal sealed class MainForm : Form, IProgressReporter
             if (L.AutoUpdate)
                 await CheckForUpdatesAsync(false);
         };
+
+        FormClosing += (_, e) =>
+        {
+            if (!running) return;
+
+            DialogResult answer = MessageBox.Show(
+                this,
+                L.T(
+                    "Bir işlem devam ediyor. İptal etmek ve pencereyi kapatmak istiyor musunuz?\n\nTamamlanan dosyalar geri alınamaz; kalan dosyalar korunur.",
+                    "An operation is still running. Cancel it and close the window?\n\nCompleted files cannot be restored; remaining files will be preserved."),
+                L.T("İşlem devam ediyor", "Operation in progress"),
+                MessageBoxButtons.YesNo,
+                MessageBoxIcon.Warning,
+                MessageBoxDefaultButton.Button2);
+
+            if (answer == DialogResult.Yes)
+            {
+                cts?.Cancel();
+                e.Cancel = true;
+            }
+            else
+            {
+                e.Cancel = true;
+            }
+        };
     }
 
     private void BuildHeader()
@@ -2265,7 +2367,7 @@ registryToolTip.SetToolTip(settingsButton, L.T("Ayarlar", "Settings"));
         registryToolTip.SetToolTip(languageButton, L.T("Dili değiştir", "Change language"));
 
         hint.SetBounds(500, 57, 196, 18);
-        hint.Text = L.T("Güvenli silme • AES-256-GCM", "Secure erasure • AES-256-GCM");
+        hint.Text = L.T("Doğrulanmış dosya silme • medya düzeyi garanti edilmez", "Verified file deletion • no media-level guarantee");
         hint.ForeColor = Color.FromArgb(30, 145, 88);
         hint.Font = new Font("Segoe UI", 8F);
         hint.TextAlign = ContentAlignment.MiddleRight;
@@ -2363,6 +2465,7 @@ registryToolTip.SetToolTip(settingsButton, L.T("Ayarlar", "Settings"));
 
         cancelButton.SetBounds(354, 362, 342, 42);
         cancelButton.Text = L.T("İptal", "Cancel");
+        cancelButton.Enabled = false;
         StyleButton(cancelButton, CardColor, TextPrimary, false);
         cancelButton.FlatAppearance.BorderColor = CardBorder;
         cancelButton.Click += (_, _) => { if (running) cts?.Cancel(); };
@@ -2517,6 +2620,9 @@ authorLogo.BringToFront();
         detailLabel.Text = "";
         SetProgress(0);
         destroyButton.Enabled = false;
+        cancelButton.Enabled = false;
+        selectFileButton.Enabled = true;
+        selectFolderButton.Enabled = true;
         destroyButton.ForeColor = Color.FromArgb(145, 150, 157);
     }
 
@@ -2885,10 +2991,15 @@ private void formSafeReportProgress(
 
     if (InvokeRequired)
     {
+        int now = Environment.TickCount;
+        if (completedBytes < totalBytes && unchecked(now - lastProgressDispatchTick) < 100)
+            return;
+        lastProgressDispatchTick = now;
+
         BeginInvoke(new Action(() =>
-            formSafeReportProgress(
+            ReportProgress(
                 completedBytes,
-                totalBytes,
+                Math.Max(totalBytes, 1),
                 elapsed)));
 
         return;
@@ -2976,7 +3087,17 @@ private void formSafeReportProgress(
     }
 
     running = true;
+    lastProgressDispatchTick = 0;
     destroyButton.Enabled = false;
+    selectFileButton.Enabled = false;
+    selectFolderButton.Enabled = false;
+    registryButton.Enabled = false;
+    historyButton.Enabled = false;
+    logsButton.Enabled = false;
+    cancelButton.Enabled = true;
+    statusLabel.Text = L.T("Hazırlanıyor...", "Preparing...");
+    detailLabel.Text = L.T("Güvenlik kontrolleri ve dosya listesi hazırlanıyor.", "Preparing safety checks and file list.");
+    VoidEraseLogger.Write($"Operation started; selectedItems={selectedItems.Count}");
 
     cts = new CancellationTokenSource();
 
@@ -3052,7 +3173,7 @@ var result = new OperationResult
     
 };
 
-
+    result.PreOperationIdentity = MediaIdentityValidation.Capture(result.TargetPath);
 
     long totalBytes = 0;
 
@@ -3248,6 +3369,7 @@ ShowOperationSummary(result);
     }
     catch (OperationCanceledException)
     {
+        VoidEraseLogger.Write("Operation cancelled by user or cancellation request.");
         operationTimer.Stop();
 
         result.Elapsed = operationTimer.Elapsed;
@@ -3273,13 +3395,33 @@ ShowOperationSummary(result);
         PersistNistSanitizationRecord(result);
         ShowOperationSummary(result);
     }
+    catch (Exception ex)
+    {
+        VoidEraseLogger.Error("Operation failed in main workflow.", ex);
+        statusLabel.Text = L.T("İşlem başarısız.", "Operation failed.");
+        detailLabel.Text = L.T("Orijinal dosya korunmuş olabilir.", "The original file may have been preserved.");
+        detailLabel.ForeColor = Danger;
+        MessageBox.Show(
+            this,
+            L.T("İşlem sırasında beklenmeyen bir hata oluştu. Ayrıntılar günlük dosyasına kaydedildi.", "An unexpected error occurred during the operation. Details were written to the log."),
+            "VoidErase",
+            MessageBoxButtons.OK,
+            MessageBoxIcon.Error);
+    }
     finally
     {
+        try { HistoryStore.FlushPending(); } catch { }
         cts.Dispose();
         cts = null;
 
         running = false;
         destroyButton.Enabled = selectedItems.Count > 0;
+        selectFileButton.Enabled = true;
+        selectFolderButton.Enabled = true;
+        registryButton.Enabled = true;
+        historyButton.Enabled = true;
+        logsButton.Enabled = true;
+        cancelButton.Enabled = false;
     }
 }
 
@@ -3287,6 +3429,14 @@ ShowOperationSummary(result);
     {
         try
         {
+            result.PostOperationIdentity = MediaIdentityValidation.Capture(result.TargetPath);
+            IdentityComparisonResult identity = MediaIdentityValidation.Compare(
+                result.PreOperationIdentity,
+                result.PostOperationIdentity,
+                L.English);
+            result.IdentityMatch = identity.Match;
+            result.IdentityValidation = identity.Status + " — " + identity.Details;
+
             NistSanitizationRecord record =
                 NistSanitizationRecordFactory.FromOperationResult(result, L.English);
             string path = NistSanitizationRecordStore.Save(record);
@@ -3378,11 +3528,11 @@ ShowOperationSummary(result);
     {
         try
         {
-            Directory.CreateDirectory(NistSanitizationRecordStore.RecordDirectory);
+            Directory.CreateDirectory(VoidEraseLogger.LogDirectory);
             Process.Start(new ProcessStartInfo
             {
                 FileName = "explorer.exe",
-                Arguments = "\"" + NistSanitizationRecordStore.RecordDirectory + "\"",
+                Arguments = "\"" + VoidEraseLogger.LogDirectory + "\"",
                 UseShellExecute = true
             });
         }
@@ -3448,6 +3598,8 @@ ShowOperationSummary(result);
                 digest = assetMatch.Groups[2].Success ? assetMatch.Groups[2].Value : null;
             }
             if (string.IsNullOrWhiteSpace(url)) throw new InvalidOperationException(L.T("Release içinde VoidErase.exe bulunamadı.", "VoidErase.exe was not found in the release."));
+            if (string.IsNullOrWhiteSpace(digest) || !digest.StartsWith("sha256:", StringComparison.OrdinalIgnoreCase))
+                throw new CryptographicException(L.T("Güncelleme SHA-256 özeti olmadan güvenli biçimde yüklenemez.", "The update cannot be installed safely without a SHA-256 digest."));
             if (!interactive) interactive = MessageBox.Show(this, L.T($"Yeni sürüm v{latest} bulundu. Güncellensin mi?", $"New version v{latest} is available. Update now?"), L.T("Güncelleme", "Update"), MessageBoxButtons.YesNo, MessageBoxIcon.Information) == DialogResult.Yes;
             else interactive = MessageBox.Show(this, L.T($"Yeni sürüm v{latest} bulundu.\n\nŞimdi indirip yüklemek ister misiniz?", $"New version v{latest} is available.\n\nDownload and install it now?"), L.T("Güncelleme", "Update"), MessageBoxButtons.YesNo, MessageBoxIcon.Information) == DialogResult.Yes;
             if (!interactive) return;
@@ -3461,7 +3613,7 @@ ShowOperationSummary(result);
             using Stream source = await download.Content.ReadAsStreamAsync();
             using FileStream dest = new(temp, FileMode.CreateNew, FileAccess.Write, FileShare.None);
             await source.CopyToAsync(dest); await dest.FlushAsync();
-            if (!string.IsNullOrWhiteSpace(digest) && digest.StartsWith("sha256:", StringComparison.OrdinalIgnoreCase))
+            if (digest.StartsWith("sha256:", StringComparison.OrdinalIgnoreCase))
             {
                 using FileStream verify = new(temp, FileMode.Open, FileAccess.Read, FileShare.Read);
                 string actual;
@@ -3476,6 +3628,7 @@ ShowOperationSummary(result);
         }
         catch (Exception ex)
         {
+            VoidEraseLogger.Error("Update check or installation failed.", ex);
             if (interactive) MessageBox.Show(this, L.T("Güncelleme başarısız oldu.\n\n" + ex.Message, "Update failed.\n\n" + ex.Message), L.T("Güncelleme", "Update"), MessageBoxButtons.OK, MessageBoxIcon.Error);
         }
         finally
@@ -4523,6 +4676,8 @@ internal sealed class OperationDetailForm : Form
 internal static class HistoryStore
 {
     private static readonly object Sync = new();
+    private static readonly List<string> Pending = new();
+    private const int FlushThreshold = 16;
 
     private static string FilePath =>
         Path.Combine(
@@ -4531,58 +4686,38 @@ internal static class HistoryStore
             "VoidErase",
             "history.log");
 
-    public static void Append(
-        string path,
-        long size,
-        string status,
-        bool verified = false)
+    public static void Append(string path, long size, string status, bool verified = false)
     {
         try
         {
             lock (Sync)
             {
-                Directory.CreateDirectory(
-                    Path.GetDirectoryName(FilePath)!);
-
                 string name = Path.GetFileName(path);
-
-string verification =
-    verified ? "VERIFIED" : "NOT_VERIFIED";
-
-File.AppendAllText(
-    FilePath,
-    $"{DateTime.Now:yyyy-MM-dd HH:mm:ss}|{status}|{name}|{size}|{verification}|{path}\n");
+                string verification = verified ? "VERIFIED" : "NOT_VERIFIED";
+                QueueLine($"{DateTime.Now:yyyy-MM-dd HH:mm:ss}|{status}|{name}|{size}|{verification}|{path}\n");
             }
         }
-        catch
-        {
-            // History logging must never interrupt deletion.
-        }
+        catch { }
     }
 
-    public static void AppendBatch(
-        string status,
-        int count,
-        bool verified = false)
+    public static void AppendBatch(string status, int count, bool verified = false)
     {
         try
         {
             lock (Sync)
             {
-                Directory.CreateDirectory(
-                    Path.GetDirectoryName(FilePath)!);
-
-                string verification =
-                    verified ? "VERIFIED" : "NOT_VERIFIED";
-
-                File.AppendAllText(
-                    FilePath,
-                    $"{DateTime.Now:yyyy-MM-dd HH:mm:ss}|{status}|{count} files|0|{verification}\n");
+                string verification = verified ? "VERIFIED" : "NOT_VERIFIED";
+                QueueLine($"{DateTime.Now:yyyy-MM-dd HH:mm:ss}|{status}|{count} files|0|{verification}\n");
             }
         }
-        catch
+        catch { }
+    }
+
+    public static void FlushPending()
+    {
+        lock (Sync)
         {
-            // History logging must never interrupt deletion.
+            FlushPendingUnsafe();
         }
     }
 
@@ -4592,16 +4727,26 @@ File.AppendAllText(
         {
             lock (Sync)
             {
-                if (!File.Exists(FilePath))
-                    return Array.Empty<string>();
-
+                FlushPendingUnsafe();
+                if (!File.Exists(FilePath)) return Array.Empty<string>();
                 return File.ReadAllLines(FilePath);
             }
         }
-        catch
-        {
-            return Array.Empty<string>();
-        }
+        catch { return Array.Empty<string>(); }
+    }
+
+    private static void QueueLine(string line)
+    {
+        Pending.Add(line);
+        if (Pending.Count >= FlushThreshold) FlushPendingUnsafe();
+    }
+
+    private static void FlushPendingUnsafe()
+    {
+        if (Pending.Count == 0) return;
+        Directory.CreateDirectory(Path.GetDirectoryName(FilePath)!);
+        File.AppendAllText(FilePath, string.Concat(Pending), Encoding.UTF8);
+        Pending.Clear();
     }
 }
 internal static class ShellRefresh

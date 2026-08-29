@@ -12,7 +12,7 @@ internal sealed class VoidEraseSettingsForm : Form
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
         MinimizeBox = false;
-        ClientSize = new Size(390, 225);
+        ClientSize = new Size(390, 278);
         BackColor = Color.FromArgb(244, 247, 250);
         Padding = new Padding(0);
 
@@ -68,12 +68,25 @@ internal sealed class VoidEraseSettingsForm : Form
 
         Controls.AddRange(new Control[] { ask, protect, hidden, updates, logs });
 
+        var safetyNote = new Label
+        {
+            Text = english
+                ? "Safety: system paths remain protected by default. File-level verification does not claim physical media sanitization."
+                : "Güvenlik: sistem yolları varsayılan olarak korunur. Dosya düzeyi doğrulama, fiziksel medya sanitizasyonu garantisi değildir.",
+            Location = new Point(20, 171),
+            Size = new Size(350, 48),
+            ForeColor = Color.FromArgb(101, 115, 130),
+            Font = new Font("Segoe UI", 8F),
+            AutoSize = false
+        };
+        Controls.Add(safetyNote);
+
         var save = new Button
         {
             Text = english ? "Save" : "Kaydet",
             DialogResult = DialogResult.OK,
             Size = new Size(100, 34),
-            Location = new Point(278, 178)
+            Location = new Point(278, 232)
         };
         save.Click += (_, _) =>
         {

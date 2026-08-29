@@ -1,0 +1,14 @@
+VoidErase Windows 10 AES-GCM düzeltmesi V2
+
+İlk düzeltme ObjectLength sorgusunu GCM modu öncesine taşıdı; ancak bazı Windows 10 CNG sağlayıcılarında ObjectLength sorgusu temel AES sağlayıcısında da STATUS_NOT_SUPPORTED (0xC00000BB) döndürüyor.
+
+Bu sürüm ObjectLength sorgusunu tamamen kaldırır. Microsoft BCryptGenerateSymmetricKey belgelerinde belirtildiği üzere pbKeyObject NULL ve cbKeyObject 0 olduğunda anahtar nesnesi sistem tarafından tahsis edilir ve BCryptDestroyKey ile serbest bırakılır.
+
+Uygulama:
+1. Bu paket içindeki AesGcmCompat.cs dosyasını proje klasöründeki dosyayla değiştirin.
+2. Eski bin ve obj klasörlerini silin.
+3. PowerShell’de .\Build-Framework48.ps1 çalıştırın.
+4. Yeni bin\Release\VoidErase.exe dosyasını çalıştırın.
+5. Küçük bir test dosyasıyla tekrar deneyin.
+
+Bu sürümde ObjectLength sorgusu yürütülmez. Fiziksel disk silme veya cihaz sanitize işlemleri etkinleştirilmez.

@@ -3,7 +3,7 @@
 Secure Windows file/folder destruction utility.
 
 ## Version
-Current release: **v1.2.1**
+Current release: **v1.4.0**
 
 ## Features
 - AES-256-GCM processing with SHA-256 verification
@@ -28,14 +28,16 @@ Current release: **v1.2.1**
 
 ## Build
 
-VoidErase targets **.NET Framework 4.8** and is built for **x64 Windows**. Open `VoidErase.Framework48.slnx` or `VoidErase.Framework48.csproj` in Visual Studio with the .NET Framework 4.8 Developer Pack installed. Alternatively, run the PowerShell build script from a Windows PowerShell session:
+VoidErase targets **.NET Framework 4.8** and is built for **x64 Windows**. Open `VoidErase.Framework48.slnx` or `VoidErase.Framework48.csproj` in Visual Studio with the .NET Framework 4.8 Developer Pack installed. Alternatively, run the automated Release build script from PowerShell:
 
 ```powershell
 Set-ExecutionPolicy -Scope Process Bypass
-.\Build-Framework48.ps1
+.\Build-Release.ps1 -Clean
 ```
 
-The script uses MSBuild when available and falls back to the `dotnet` CLI. It verifies that `bin\\Release\\VoidErase.exe` was produced. The sandbox used for source inspection does not contain the Windows .NET Framework targeting pack, so the final Release build must be verified on Windows.
+The automated script reports the version, validates the Release output, and prints the SHA-256 hash. Use `-RunTests` to run any separate test projects and `-CopyToProjectRoot` to copy the final executable to the project root.
+
+The script uses MSBuild when available and falls back to the `dotnet` CLI. It verifies that `bin\\Release\\VoidErase.exe` was produced. The final v1.4.0 Release build has been verified on Windows.
 
 Historical source copies and patch notes are kept under `archive/` and are not part of the active build.
 

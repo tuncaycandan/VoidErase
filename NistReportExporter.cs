@@ -26,13 +26,19 @@ internal static class NistReportExporter
             Pair(english ? "Record ID" : "Kayıt ID", record.RecordId), Pair(english ? "Standard" : "Standart", record.Standard),
             Pair(english ? "Technique" : "Teknik", record.Technique), Pair(english ? "Method" : "Yöntem", record.Method),
             Pair(english ? "Assurance" : "Güvence", record.Assurance), Pair(english ? "Compatibility" : "Uyumluluk", record.Compatibility),
-            Pair(english ? "Validation required" : "Validasyon gerekli", record.ValidationRequiredText), Pair(english ? "Decision reason" : "Karar nedeni", record.DecisionReason), Pair(english ? "Language" : "Dil", record.Language), Pair(english ? "Provider" : "Sağlayıcı", record.ProviderName), Pair(english ? "Evidence path" : "Kanıt yolu", record.EvidencePath), Pair(english ? "Identity validation" : "Kimlik doğrulama", record.IdentityValidation)
+            Pair(english ? "Validation required" : "Validasyon gerekli", record.ValidationRequiredText), Pair(english ? "Decision reason" : "Karar nedeni", record.DecisionReason), Pair(english ? "Language" : "Dil", record.Language), Pair(english ? "Provider" : "Sağlayıcı", record.ProviderName), Pair(english ? "Provider version" : "Sağlayıcı sürümü", record.ProviderVersion), Pair(english ? "Evidence path" : "Kanıt yolu", record.EvidencePath), Pair(english ? "Identity validation" : "Kimlik doğrulama", record.IdentityValidation)
         });
         Section(html, english ? "Media identity" : "Medya kimliği", new[] {
             Pair(english ? "Target path" : "Hedef yolu", record.Media.TargetPath), Pair(english ? "Physical drive" : "Fiziksel aygıt", record.Media.PhysicalDrive),
             Pair(english ? "Disk number" : "Disk numarası", record.Media.DiskNumber), Pair("Model", record.Media.Model),
             Pair(english ? "Serial number" : "Seri numarası", record.Media.SerialNumber), Pair(english ? "Media type" : "Medya türü", record.Media.MediaType),
             Pair(english ? "Bus type" : "Bağlantı türü", record.Media.BusType), Pair(english ? "Size (bytes)" : "Boyut (bayt)", record.Media.SizeBytes.ToString("N0"))
+        });
+        Section(html, english ? "Identity validation" : "Kimlik doğrulama", new[] {
+            Pair(english ? "Status" : "Durum", record.IdentityValidation),
+            Pair(english ? "Identity match" : "Kimlik eşleşmesi", record.IdentityMatch ? (english ? "Yes" : "Evet") : (english ? "No" : "Hayır")),
+            Pair(english ? "Pre-operation identity" : "İşlem öncesi kimlik", SnapshotSummary(record.PreOperationIdentity)),
+            Pair(english ? "Post-operation identity" : "İşlem sonrası kimlik", SnapshotSummary(record.PostOperationIdentity))
         });
         Section(html, english ? "Verification" : "Doğrulama", new[] {
             Pair(english ? "Outcome" : "Sonuç", record.Verification.Outcome), Pair(english ? "Method" : "Yöntem", record.Verification.Method),
@@ -74,12 +80,25 @@ internal static class NistReportExporter
     }
 
     private static string Pair(string label, string value) { return "<div class=\"item\"><div class=\"label\">" + E(label) + "</div><div class=\"value\">" + E(value) + "</div></div>"; }
+
+    private static string SnapshotSummary(SanitizationIdentitySnapshot snapshot)
+    {
+        if (snapshot == null) return "Not available";
+        return (snapshot.PhysicalDrive ?? "") + " / " +
+               (snapshot.DiskNumber ?? "") + " / " +
+               (snapshot.Model ?? "") + " / " +
+               (snapshot.SerialNumber ?? "") + " / " +
+               snapshot.SizeBytes.ToString("N0");
+    }
+
     private static string E(string value) { return WebUtility.HtmlEncode(value ?? ""); }
 }
 
 internal interface ISanitizationProvider
 {
     string ProviderName { get; }
+    string ProviderVersion { get; }
+    bool PhysicalWriteAuthorized { get; }
     bool CanHandle(string mediaType);
     string PrepareDryRun(string targetPath);
 }
@@ -87,6 +106,8 @@ internal interface ISanitizationProvider
 internal sealed class DryRunSanitizationProvider : ISanitizationProvider
 {
     public string ProviderName { get { return "VoidErase dry-run provider"; } }
+    public string ProviderVersion { get { return "1.4.0"; } }
+    public bool PhysicalWriteAuthorized { get { return false; } }
     public bool CanHandle(string mediaType) { return !string.IsNullOrWhiteSpace(mediaType); }
     public string PrepareDryRun(string targetPath) { return "DRY-RUN ONLY: no physical device write is authorized."; }
 }

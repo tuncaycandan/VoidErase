@@ -1,0 +1,21 @@
+VoidErase Windows 10 AES-GCM düzeltmesi
+
+Hata:
+BCryptGetProperty(ObjectLength) failed. BCrypt status: 0xC00000BB
+
+Neden:
+Bazı Windows 10 CNG sağlayıcıları, AES algoritması GCM zincirleme moduna alındıktan sonra ObjectLength özelliğini sorgulamayı desteklemiyor.
+
+Düzeltme:
+AesGcmCompat.cs içinde ObjectLength, ChainingModeGCM ayarlanmadan önce sorgulanıyor. Ardından GCM modu ayarlanıyor ve anahtar üretiliyor.
+
+Uygulama:
+1. AesGcmCompat.cs dosyasını mevcut proje klasöründeki dosyayla değiştirin.
+2. PowerShell açın.
+3. Proje klasöründe şu komutu çalıştırın:
+   .\Build-Framework48.ps1
+4. Yeni bin\Release\VoidErase.exe dosyasını çalıştırın.
+5. Önce kişisel olmayan küçük bir test dosyası üzerinde deneyin.
+
+Not:
+Bu düzeltme yalnızca görülen BCrypt başlatma hatasını hedefler. Fiziksel disk silme veya cihaz seviyesinde sanitize işlemlerini etkinleştirmez.

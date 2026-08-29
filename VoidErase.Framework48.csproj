@@ -73,6 +73,7 @@
     <Compile Include="NistSanitizationRecord.cs" />
     <Compile Include="NistReportExporter.cs" />
     <Compile Include="SanitizationEvidence.cs" />
+    <Compile Include="IdentityValidation.cs" />
     <Compile Include="SafetyScenarioTests.cs" />
     <Compile Include="DeletionEngineV2.cs" />
     <Compile Include="FinalStorageSafetyGate.cs" />
@@ -84,6 +85,8 @@
     <Compile Include="HddLogicalClearExecution.cs" />
     <Compile Include="UsbTargetPreflight.cs" />
     <Compile Include="HddLogicalClearExecutionTest.cs" />
+    <Compile Include="PerformanceBenchmark.cs" />
+    <Compile Include="SecureBufferPool.cs" />
   </ItemGroup>
 
   <ItemGroup>

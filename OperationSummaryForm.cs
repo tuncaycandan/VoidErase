@@ -43,7 +43,7 @@ internal sealed class OperationSummaryForm : Form
         FormBorderStyle = FormBorderStyle.FixedDialog;
         MaximizeBox = false;
         MinimizeBox = false;
-        ClientSize = new Size(680, 615);
+        ClientSize = new Size(680, 637);
         BackColor = BackgroundColor;
         Font = new Font("Segoe UI", 9F);
 
@@ -242,7 +242,7 @@ internal sealed class OperationSummaryForm : Form
 metadataHeading.SetBounds(20, 380, 260, 20);
 Controls.Add(metadataHeading);
 
-Panel metadataCard = CreateCard(20, 400, 640, 70);
+Panel metadataCard = CreateCard(20, 400, 640, 88);
 
 string validationText = english
     ? (result.NistValidationRequired ? "Yes" : "No")
@@ -255,6 +255,7 @@ string metadataText = english
       "NIST SP 800-88 Rev. 2: terminology-aligned reporting only; " +
       "media-level sanitization is not claimed.\n" +
       "Decision: " + result.NistCompatibility + " • Validation required: " + validationText + "\n" +
+      "Identity: " + (string.IsNullOrWhiteSpace(result.IdentityValidation) ? "Not available" : result.IdentityValidation) + "\n" +
       "Media: " + result.NistMediaSummary + "\n" + result.NistDecisionReason
     : "Yöntem: Kriptografik dönüştürme + doğrulanmış silme    •    " +
       "Kapsam: Uygulama düzeyi dosya sanitizasyonu    •    " +
@@ -262,13 +263,14 @@ string metadataText = english
       "NIST SP 800-88 Rev. 2: yalnızca terminoloji uyumlu raporlama; " +
       "medya düzeyi sanitizasyon iddia edilmez.\n" +
       "Karar: " + result.NistCompatibility + " • Validasyon gerekli: " + validationText + "\n" +
+      "Kimlik: " + (string.IsNullOrWhiteSpace(result.IdentityValidation) ? "Uygulanamadı" : result.IdentityValidation) + "\n" +
       "Medya: " + result.NistMediaSummary + "\n" + result.NistDecisionReason;
 
 Label metadata = new()
 {
     Text = metadataText,
     Location = new Point(16, 12),
-    Size = new Size(608, 46),
+    Size = new Size(608, 64),
     Font = new Font("Segoe UI", 8.5F, FontStyle.Bold),
     ForeColor = TextSecondary,
     AutoEllipsis = true
@@ -280,12 +282,12 @@ Controls.Add(metadataCard);
         Label detailsHeading = CreateSectionLabel(
             english ? "DETAILS" : "AYRINTILAR");
 
-        detailsHeading.SetBounds(20, 473, 150, 20);
+        detailsHeading.SetBounds(20, 495, 150, 20);
         Controls.Add(detailsHeading);
 
         ListBox list = new()
         {
-            Location = new Point(20, 495),
+            Location = new Point(20, 517),
             Size = new Size(500, 70),
             Font = new Font("Segoe UI", 8.5F),
             BorderStyle = BorderStyle.FixedSingle,
@@ -311,7 +313,7 @@ Controls.Add(metadataCard);
 
         Controls.Add(list);
 
-        Panel methodCard = CreateCard(532, 495, 128, 70);
+        Panel methodCard = CreateCard(532, 517, 128, 70);
 
         Label method = new()
         {
@@ -333,7 +335,7 @@ Controls.Add(metadataCard);
         {
             Text = english ? "HTML" : "HTML Raporu",
             Size = new Size(105, 34),
-            Location = new Point(260, 570),
+            Location = new Point(260, 592),
             FlatStyle = FlatStyle.Flat,
             BackColor = CardColor,
             ForeColor = TextPrimary,
@@ -356,7 +358,7 @@ Controls.Add(metadataCard);
         {
             Text = english ? "PDF" : "PDF Raporu",
             Size = new Size(105, 34),
-            Location = new Point(370, 570),
+            Location = new Point(370, 592),
             FlatStyle = FlatStyle.Flat,
             BackColor = CardColor,
             ForeColor = TextPrimary,
@@ -380,7 +382,7 @@ Controls.Add(metadataCard);
         {
             Text = english ? "NIST XML" : "NIST XML",
             Size = new Size(95, 34),
-            Location = new Point(480, 570),
+            Location = new Point(480, 592),
             FlatStyle = FlatStyle.Flat,
             BackColor = CardColor,
             ForeColor = TextPrimary,
@@ -407,7 +409,7 @@ Controls.Add(metadataCard);
             Text = english ? "Close" : "Kapat",
             DialogResult = DialogResult.OK,
 Size = new Size(95, 34),
-            Location = new Point(580, 570),
+            Location = new Point(580, 592),
             FlatStyle = FlatStyle.Flat,
             BackColor = CardColor,
             ForeColor = TextPrimary,

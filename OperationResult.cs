@@ -39,6 +39,11 @@ internal sealed class OperationResult
     public bool NistValidationRequired { get; set; }
     public string NistDecisionReason { get; set; } = "";
     public string NistMediaSummary { get; set; } = "";
+    public SanitizationIdentitySnapshot PreOperationIdentity { get; set; }
+    public SanitizationIdentitySnapshot PostOperationIdentity { get; set; }
+    public bool IdentityMatch { get; set; }
+    public string IdentityValidation { get; set; } = "";
+    public string FailureReason { get; set; } = "";
 
     public List<string> SuccessfulFiles { get; } = new();
     public List<string> FailedFiles { get; } = new();
